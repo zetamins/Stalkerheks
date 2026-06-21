@@ -1,7 +1,7 @@
 {
     "logs": [
         {
-            "outputFile": "com.stalkerhek.app-mergeReleaseResources-19:/values-fr/values-fr.xml",
+            "outputFile": "com.stalkerhek.app-mergeReleaseResources-18:/values-fr/values-fr.xml",
             "map": [
                 {
                     "source": "/home/seerish/.gradle/caches/transforms-3/68b2f9db80fd5fbadc0f11fe19280caa/transformed/appcompat-1.6.1/res/values-fr/values-fr.xml",

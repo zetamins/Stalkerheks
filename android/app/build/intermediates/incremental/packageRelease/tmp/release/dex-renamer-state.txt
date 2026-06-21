@@ -1,4 +1,4 @@
-#Mon Jun 22 01:37:25 MUT 2026
+#Mon Jun 22 02:38:58 MUT 2026
 base.0=/home/seerish/STB/stalkerhek/android/app/build/intermediates/dex/release/mergeDexRelease/classes.dex
 renamed.0=classes.dex
 path.0=classes.dex

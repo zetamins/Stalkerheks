@@ -535,14 +535,15 @@ library {
 }
 library {
   maven_library {
-    groupId: "androidx.webkit"
-    artifactId: "webkit"
-    version: "1.9.0"
+    groupId: "com.google.zxing"
+    artifactId: "core"
+    version: "3.5.3"
   }
   digests {
-    sha256: "\'\274 15\360[\230O\302\030\325\251\307\t\360\224\232\031\244\210a_#I\353\334\331\346\367\"\242"
+    sha256: "\215\200d\301co\332\357q\211\335\220U\307\325\231P\250\224\n\022\362)9VDn\303\301\t\375\202"
   }
   repo_index {
+    value: 1
   }
 }
 library_dependencies {
@@ -801,11 +802,6 @@ library_dependencies {
 library_dependencies {
   library_index: 43
   library_dep_index: 2
-}
-library_dependencies {
-  library_index: 44
-  library_dep_index: 2
-  library_dep_index: 4
 }
 module_dependencies {
   module_name: "base"
