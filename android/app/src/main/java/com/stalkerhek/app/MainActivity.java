@@ -1,69 +1,138 @@
 package com.stalkerhek.app;
 
 import android.app.Activity;
+import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Gravity;
+import android.view.View;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.WebSettings;
+import android.widget.FrameLayout;
+import android.widget.ProgressBar;
+import android.widget.TextView;
+import android.widget.LinearLayout;
 
 /**
  * Stalkerhek Android App — runs the stalkerhek proxy server and displays
- * the dashboard in a full-screen WebView. The Go server is started via
- * gomobile bindings (mobile.StartServer).
+ * the dashboard in a full-screen WebView.
  *
- * Build prerequisites:
- *   1. gomobile init
- *   2. gomobile bind -target=android -androidapi 21 -o app.aar ./mobile
- *   3. Place app.aar in android/app/libs/
- *   4. Build with Android Studio or ./gradlew assembleRelease
+ * Startup flow:
+ *   1. Show splash: dark screen with spinner + "Starting stalkerhek..."
+ *   2. Go server starts in background (proxy + HLS + dashboard)
+ *   3. WebView polls dashboard until it's ready, then fades in
  */
 public class MainActivity extends Activity {
 
     private WebView webView;
+    private LinearLayout splashView;
+    private Handler handler = new Handler(Looper.getMainLooper());
+    private int pollAttempts = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Start stalkerhek Go server in a background thread.
-        // The Go library handles proxy + HLS + dashboard startup.
-        final String dbDir = getFilesDir().getAbsolutePath();
-        final String profileName = "default";
+        FrameLayout root = new FrameLayout(this);
 
+        // ---- SPLASH SCREEN ----
+        splashView = new LinearLayout(this);
+        splashView.setOrientation(LinearLayout.VERTICAL);
+        splashView.setGravity(Gravity.CENTER);
+        splashView.setBackgroundColor(Color.parseColor("#0a0f0a"));
+
+        ProgressBar spinner = new ProgressBar(this);
+        spinner.getIndeterminateDrawable().setTint(Color.parseColor("#2d7a4e"));
+        spinner.setScaleX(1.3f);
+        spinner.setScaleY(1.3f);
+
+        TextView title = new TextView(this);
+        title.setText("Stalkerhek");
+        title.setTextColor(Color.parseColor("#e0e6e0"));
+        title.setTextSize(24);
+        title.setPadding(0, 30, 0, 8);
+
+        TextView subtitle = new TextView(this);
+        subtitle.setText("Starting services...");
+        subtitle.setTextColor(Color.parseColor("#9aaa9a"));
+        subtitle.setTextSize(14);
+
+        splashView.addView(spinner);
+        splashView.addView(title);
+        splashView.addView(subtitle);
+        root.addView(splashView);
+
+        // ---- WEBVIEW (hidden initially) ----
+        webView = new WebView(this);
+        webView.setVisibility(View.GONE);
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                // Dashboard loaded — show it
+                webView.setAlpha(0f);
+                webView.setVisibility(View.VISIBLE);
+                webView.animate().alpha(1f).setDuration(400).start();
+                splashView.animate().alpha(0f).setDuration(300)
+                    .withEndAction(() -> splashView.setVisibility(View.GONE)).start();
+            }
+        });
+        WebSettings settings = webView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+        root.addView(webView);
+
+        setContentView(root);
+
+        // Start Go server in background
+        final String dbDir = getFilesDir().getAbsolutePath();
         new Thread(() -> {
             try {
-                // mobile.StartServer starts all services and returns the dashboard port.
-                // This call blocks while services run.
-                mobile.Mobile.startServer(dbDir, profileName);
+                mobile.Mobile.startServer(dbDir, "default");
             } catch (Exception e) {
                 android.util.Log.e("Stalkerhek", "Server start failed", e);
             }
         }).start();
 
-        // Create full-screen WebView for the dashboard
-        webView = new WebView(this);
-        webView.setWebViewClient(new WebViewClient());
-        WebSettings settings = webView.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);
-        settings.setAllowFileAccess(false);
-        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+        // Poll until dashboard is ready, then load it
+        pollDashboard();
+    }
 
-        // Load the dashboard after a short delay to let the server start
-        webView.postDelayed(() -> {
-            webView.loadUrl("http://127.0.0.1:8080/");
-        }, 3000);
-
-        setContentView(webView);
+    private void pollDashboard() {
+        new Thread(() -> {
+            try {
+                java.net.URL url = new java.net.URL("http://127.0.0.1:8080/");
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(2000);
+                conn.setReadTimeout(2000);
+                int code = conn.getResponseCode();
+                conn.disconnect();
+                if (code == 200) {
+                    handler.post(() -> webView.loadUrl("http://127.0.0.1:8080/"));
+                    return;
+                }
+            } catch (Exception e) {
+                // Server not ready yet
+            }
+            pollAttempts++;
+            if (pollAttempts < 30) {
+                handler.postDelayed(this::pollDashboard, 1000);
+            } else {
+                // Timeout — load anyway, dashboard might start late
+                handler.post(() -> webView.loadUrl("http://127.0.0.1:8080/"));
+            }
+        }).start();
     }
 
     @Override
     public void onBackPressed() {
-        if (webView.canGoBack()) {
+        if (webView.canGoBack() && webView.getVisibility() == View.VISIBLE) {
             webView.goBack();
         } else {
-            // Minimize rather than exit (keeps server running in background)
-            moveTaskToBack(true);
+            moveTaskToBack(true); // minimize, keep server running
         }
     }
 
