@@ -1,6 +1,7 @@
 package com.stalkerhek.app;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.os.Bundle;
@@ -145,6 +146,47 @@ public class MainActivity extends Activity {
         settings.setDomStorageEnabled(true);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         root.addView(webView);
+
+
+		// ---- BOTTOM BAR (restart + kill) ----
+		LinearLayout bottomBar = new LinearLayout(this);
+		bottomBar.setOrientation(LinearLayout.HORIZONTAL);
+		bottomBar.setGravity(Gravity.CENTER);
+		bottomBar.setBackgroundColor(Color.parseColor("#0d1410"));
+		bottomBar.setPadding(8, 10, 8, 10);
+
+		Button restartBtn = new Button(this);
+		restartBtn.setText("Restart");
+		restartBtn.setTextColor(Color.WHITE);
+		restartBtn.setBackgroundColor(Color.parseColor("#2d7a4e"));
+		restartBtn.setOnClickListener(v -> {
+			Intent intent = getBaseContext().getPackageManager()
+				.getLaunchIntentForPackage(getBaseContext().getPackageName());
+			intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+			startActivity(intent);
+			android.os.Process.killProcess(android.os.Process.myPid());
+			System.exit(0);
+		});
+
+		Button killBtn = new Button(this);
+		killBtn.setText("Kill");
+		killBtn.setTextColor(Color.WHITE);
+		killBtn.setBackgroundColor(Color.parseColor("#e85d4d"));
+		killBtn.setOnClickListener(v -> {
+			android.os.Process.killProcess(android.os.Process.myPid());
+			System.exit(0);
+		});
+
+		bottomBar.addView(restartBtn,
+			new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+		bottomBar.addView(killBtn,
+			new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+		FrameLayout.LayoutParams barParams = new FrameLayout.LayoutParams(
+			FrameLayout.LayoutParams.MATCH_PARENT,
+			FrameLayout.LayoutParams.WRAP_CONTENT);
+		barParams.gravity = Gravity.BOTTOM;
+		root.addView(bottomBar, barParams);
 
         setContentView(root);
 
