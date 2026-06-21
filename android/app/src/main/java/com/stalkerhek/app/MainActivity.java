@@ -87,11 +87,31 @@ public class MainActivity extends Activity {
 
         setContentView(root);
 
-        // Start Go server in background
+        // Extract native Go binary from assets and start in background
         final String dbDir = getFilesDir().getAbsolutePath();
+        final String binPath = dbDir + "/stalkerhek";
         new Thread(() -> {
             try {
-                mobile.Mobile.startServer(dbDir, "default");
+                // Copy binary from assets to internal storage
+                java.io.InputStream in = getAssets().open("stalkerhek");
+                java.io.FileOutputStream out = new java.io.FileOutputStream(binPath);
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > -1) out.write(buf, 0, n);
+                in.close(); out.close();
+                // Make executable
+                new java.io.File(binPath).setExecutable(true);
+
+                // Start stalkerhek server
+                java.lang.Process proc = Runtime.getRuntime().exec(
+                    new String[]{binPath, "-profile", "default", "-db", dbDir});
+                // Log output for debugging
+                java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(proc.getInputStream()));
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    android.util.Log.i("Stalkerhek", line);
+                }
             } catch (Exception e) {
                 android.util.Log.e("Stalkerhek", "Server start failed", e);
             }
