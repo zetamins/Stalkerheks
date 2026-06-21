@@ -68,16 +68,11 @@ jobs:
           GOARM=${{ matrix.goarm }}
           CGO_ENABLED=0
 
-          # All Android targets need CGO for net package (external linking)
-          if [ "$GOOS" = "android" ]; then
-            CGO_ENABLED=1
-            case "$GOARCH" in
-              arm)   CC="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang" ;;
-              arm64) CC="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" ;;
-              amd64) CC="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang" ;;
-            esac
-            export CC CGO_ENABLED
-            echo "CGO enabled: GOARCH=$GOARCH CC=$CC"
+          # Only Android ARM32 needs CGO (external linker). ARM64 + x86_64 work without.
+          if [ "$GOOS" = "android" ] && [ "$GOARCH" = "arm" ]; then
+            export CC="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang"
+            export CGO_ENABLED=1
+            echo "CGO enabled for ARM32: CC=$CC"
           fi
 
           go build -o "$NAME" ./cmd/stalkerhek/
