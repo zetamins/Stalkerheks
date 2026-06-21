@@ -63,14 +63,24 @@ jobs:
           NDK_PATH: ${{ github.workspace }}/android-ndk-r26d
         run: |
           NAME="${{ matrix.name }}"
-          if echo "$NAME" | grep -q 'arm32'; then
-            export CC="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang"
-            export CGO_ENABLED=1
-            echo "CGO ARM32 build with CC=$CC"
-          else
-            export CGO_ENABLED=0
+          GOOS=${{ matrix.goos }}
+          GOARCH=${{ matrix.goarch }}
+          GOARM=${{ matrix.goarm }}
+          CGO_ENABLED=0
+
+          # All Android targets need CGO for net package (external linking)
+          if [ "$GOOS" = "android" ]; then
+            CGO_ENABLED=1
+            case "$GOARCH" in
+              arm)   CC="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang" ;;
+              arm64) CC="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang" ;;
+              amd64) CC="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang" ;;
+            esac
+            export CC CGO_ENABLED
+            echo "CGO enabled: GOARCH=$GOARCH CC=$CC"
           fi
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} go build -o "$NAME" ./cmd/stalkerhek/
+
+          go build -o "$NAME" ./cmd/stalkerhek/
           file "$NAME"
       - uses: actions/upload-artifact@v4
         with:
