@@ -87,13 +87,16 @@ public class MainActivity extends Activity {
 
         setContentView(root);
 
-        // Extract native Go binary from assets and start in background
+        // Extract native Go binary from assets and start in background.
+        // Auto-detect architecture: ARM64 for phones, ARM32 for older TVs.
         final String dbDir = getFilesDir().getAbsolutePath();
         final String binPath = dbDir + "/stalkerhek";
+        final String assetName = android.os.Build.SUPPORTED_64_BIT_ABIS.length > 0
+            ? "stalkerhek-arm64" : "stalkerhek-arm";
         new Thread(() -> {
             try {
                 // Copy binary from assets to internal storage
-                java.io.InputStream in = getAssets().open("stalkerhek");
+                java.io.InputStream in = getAssets().open(assetName);
                 java.io.FileOutputStream out = new java.io.FileOutputStream(binPath);
                 byte[] buf = new byte[8192];
                 int n;
