@@ -8,6 +8,10 @@ permissions:
   contents: write
   actions: write
 
+env:
+  NDK_VERSION: r26d
+  NDK_API: 21
+
 jobs:
   version:
     name: Bump Version
@@ -42,21 +46,40 @@ jobs:
     strategy:
       matrix:
         include:
+          # Linux — no cgo needed
           - {name: stalkerhek-linux-amd64, goos: linux, goarch: amd64}
           - {name: stalkerhek-linux-arm64, goos: linux, goarch: arm64}
           - {name: stalkerhek-linux-arm32, goos: linux, goarch: arm, goarm: "7"}
-          - {name: stalkerhek-android-arm64, goos: android, goarch: arm64}
-          - {name: stalkerhek-android-x86_64, goos: android, goarch: amd64}
+          # Android — all 4 ABIs, built with cgo + NDK clang
+          - {name: stalkerhek-android-arm64, goos: android, goarch: arm64, cc: aarch64-linux-android}
+          - {name: stalkerhek-android-arm32, goos: android, goarch: arm, goarm: "7", cc: armv7a-linux-androideabi}
+          - {name: stalkerhek-android-x86, goos: android, goarch: "386", cc: i686-linux-android}
+          - {name: stalkerhek-android-x86_64, goos: android, goarch: amd64, cc: x86_64-linux-android}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+
+      - name: Install Android NDK
+        if: matrix.goos == 'android'
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
+          unzip -q android-ndk-${NDK_VERSION}-linux.zip
+          echo "NDK_HOME=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+
       - name: Build
         run: |
-          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} \
+          if [ "${{ matrix.goos }}" = "android" ]; then
+            export CC="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.cc }}${NDK_API}-clang"
+            export CGO_ENABLED=1
+          else
+            export CGO_ENABLED=0
+          fi
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} \
             go build -o ${{ matrix.name }} ./cmd/stalkerhek/
           file ${{ matrix.name }}
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
@@ -81,6 +104,8 @@ jobs:
       - name: Organize binaries
         run: |
           mv android/app/src/main/assets/stalkerhek-android-arm64/* android/app/src/main/assets/stalkerhek-arm64
+          mv android/app/src/main/assets/stalkerhek-android-arm32/* android/app/src/main/assets/stalkerhek-arm32
+          mv android/app/src/main/assets/stalkerhek-android-x86/* android/app/src/main/assets/stalkerhek-x86
           mv android/app/src/main/assets/stalkerhek-android-x86_64/* android/app/src/main/assets/stalkerhek-x86_64
           ls -la android/app/src/main/assets/
       - name: Build APK
