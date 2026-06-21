@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/erkexzcx/stalkerhek/dashboard"
 	"github.com/erkexzcx/stalkerhek/db"
@@ -33,10 +34,21 @@ func main() {
 		log.Fatalln("Failed to load profile:", err)
 	}
 
-	// Connect to Stalker portal
+	// Connect to Stalker portal with retry — matches STB's DHCP/NTP wait behavior.
+	// The STB waits up to 30s for network; we retry up to 5 times with backoff.
 	log.Println("Connecting to Stalker middleware...")
-	if err = c.Portal.Start(); err != nil {
-		log.Fatalln(err)
+	for attempt := 1; attempt <= 5; attempt++ {
+		err = c.Portal.Start()
+		if err == nil {
+			break
+		}
+		if attempt < 5 {
+			wait := time.Duration(attempt) * 3 * time.Second
+			log.Printf("Connection attempt %d failed: %v — retrying in %v", attempt, err, wait)
+			time.Sleep(wait)
+		} else {
+			log.Fatalln("Failed to connect after 5 attempts:", err)
+		}
 	}
 
 	// Retrieve channels list
