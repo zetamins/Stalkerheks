@@ -46,44 +46,17 @@ jobs:
           - {name: stalkerhek-linux-arm64, goos: linux, goarch: arm64}
           - {name: stalkerhek-linux-arm32, goos: linux, goarch: arm, goarm: "7"}
           - {name: stalkerhek-android-arm64, goos: android, goarch: arm64}
-          - {name: stalkerhek-android-arm32, goos: android, goarch: arm, goarm: "7"}
           - {name: stalkerhek-android-x86_64, goos: android, goarch: amd64}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-      - name: Setup NDK (for Android CGO)
-        run: |
-          wget --timeout=120 -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
-          unzip -q android-ndk-r25c-linux.zip
-          echo "NDK=$PWD/android-ndk-r25c" >> $GITHUB_ENV
       - name: Build
         run: |
-          NAME="${{ matrix.name }}"
-          GOOS=${{ matrix.goos }}
-          GOARCH=${{ matrix.goarch }}
-          GOARM=${{ matrix.goarm }}
-          CGO_ENABLED=0
-
-          if [ "$GOOS" = "android" ]; then
-            TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-            SYSROOT="$TOOLCHAIN/sysroot"
-            case "$GOARCH" in
-              arm)   TARGET="armv7a-linux-androideabi21" ;;
-              arm64) TARGET="aarch64-linux-android21" ;;
-              amd64) TARGET="x86_64-linux-android21" ;;
-            esac
-            export CC="$TOOLCHAIN/bin/${TARGET}-clang"
-            export CC_FOR_TARGET="$CC"
-            export CGO_ENABLED=1
-            export CGO_CFLAGS="--sysroot=$SYSROOT"
-            export CGO_LDFLAGS="--sysroot=$SYSROOT"
-            echo "CGO: $GOARCH -> $TARGET sysroot=$SYSROOT"
-          fi
-
-          go build -o "$NAME" ./cmd/stalkerhek/ 2>&1 | tail -3
-          file "$NAME"
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} \
+            go build -o ${{ matrix.name }} ./cmd/stalkerhek/
+          file ${{ matrix.name }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
@@ -108,7 +81,6 @@ jobs:
       - name: Organize binaries
         run: |
           mv android/app/src/main/assets/stalkerhek-android-arm64/* android/app/src/main/assets/stalkerhek-arm64
-          mv android/app/src/main/assets/stalkerhek-android-arm32/* android/app/src/main/assets/stalkerhek-arm
           mv android/app/src/main/assets/stalkerhek-android-x86_64/* android/app/src/main/assets/stalkerhek-x86_64
           ls -la android/app/src/main/assets/
       - name: Build APK

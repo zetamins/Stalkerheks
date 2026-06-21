@@ -42,6 +42,6 @@ public class BootReceiver extends BroadcastReceiver {
         String abi = android.os.Build.SUPPORTED_ABIS[0];
         if (abi.contains("x86_64")) return "stalkerhek-x86_64";
         else if (abi.contains("arm64")) return "stalkerhek-arm64";
-        else return "stalkerhek-arm";
+        else return "stalkerhek-arm64";
     }
 }

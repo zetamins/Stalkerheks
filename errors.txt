@@ -1,5 +1,127 @@
 Run NAME="stalkerhek-android-arm32"
-CGO: arm -> armv7a-linux-androideabi24 CC=/home/runner/work/Stalkerheks/Stalkerheks/android-ndk-r25c/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang
-# runtime/cgo
-_cgo_export.c:3:10: fatal error: 'stdlib.h' file not found
+CGO: arm -> armv7a-linux-androideabi21 sysroot=/home/runner/work/Stalkerheks/Stalkerheks/android-ndk-r25c/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+gcc_amd64.S:50:7: error: invalid operand
+ popq %rbx
+      ^
 stalkerhek-android-arm32: cannot open `stalkerhek-android-arm32' (No such file or directory)
+
+Run NAME="stalkerhek-android-arm64"
+CGO: arm64 -> aarch64-linux-android21 sysroot=/home/runner/work/Stalkerheks/Stalkerheks/android-ndk-r25c/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+gcc_amd64.S:50:7: error: invalid operand
+ popq %rbx
+      ^
+stalkerhek-android-arm64: cannot open `stalkerhek-android-arm64' (No such file or directory)
+
+all same errors
+Cross-compiling Go for Android involves setting `GOOS=android` plus the right `GOARCH` for each target, and usually requires the Android NDK if your code uses cgo (which it often does for Android, since `net` package and others may need it, or if you use gomobile).
+
+## 1. Pure Go (no cgo) — simplest case
+
+If your code has no C dependencies, you can cross-compile without the NDK at all:
+
+```bash
+GOOS=android GOARCH=arm64 go build -o app-arm64
+GOOS=android GOARCH=arm   go build -o app-arm
+GOOS=android GOARCH=386   go build -o app-x86
+GOOS=android GOARCH=amd64 go build -o app-x86_64
+```
+
+This works because Go's standard library has `android` as a supported `GOOS`. But note: `CGO_ENABLED=0` is implied here, and some packages (like those needing DNS resolution via cgo, or anything calling into JNI) won't work properly without cgo.
+
+## 2. With cgo (the realistic case for Android)
+
+Most real Android Go code (especially via gomobile, or anything touching JNI) needs `CGO_ENABLED=1`, which means you need the **Android NDK** and per-arch C compilers.
+
+### Step 1: Install the NDK
+Download the NDK (standalone or via Android Studio SDK Manager). Recommended: NDK r25+ (LTS).
+
+```bash
+export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/25.2.9519653
+export NDK_TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin
+```
+(adjust `linux-x86_64` to `darwin-x86_64` or `windows-x86_64` for your host)
+
+### Step 2: Set CC per architecture and build
+
+Android API level matters — pick a minSdkVersion (e.g. 21).
+
+**arm64-v8a:**
+```bash
+CGO_ENABLED=1 GOOS=android GOARCH=arm64 \
+CC=$NDK_TOOLCHAIN/aarch64-linux-android21-clang \
+go build -o libs/arm64-v8a/app
+```
+
+**armeabi-v7a:**
+```bash
+CGO_ENABLED=1 GOOS=android GOARCH=arm GOARM=7 \
+CC=$NDK_TOOLCHAIN/armv7a-linux-androideabi21-clang \
+go build -o libs/armeabi-v7a/app
+```
+
+**x86:**
+```bash
+CGO_ENABLED=1 GOOS=android GOARCH=386 \
+CC=$NDK_TOOLCHAIN/i686-linux-android21-clang \
+go build -o libs/x86/app
+```
+
+**x86_64:**
+```bash
+CGO_ENABLED=1 GOOS=android GOARCH=amd64 \
+CC=$NDK_TOOLCHAIN/x86_64-linux-android21-clang \
+go build -o libs/x86_64/app
+```
+
+## 3. Build script for all 4 ABIs at once
+
+```bash
+#!/bin/bash
+set -e
+
+NDK=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin
+API=21
+
+declare -A targets=(
+  ["arm64-v8a"]="arm64 aarch64-linux-android"
+  ["armeabi-v7a"]="arm armv7a-linux-androideabi"
+  ["x86"]="386 i686-linux-android"
+  ["x86_64"]="amd64 x86_64-linux-android"
+)
+
+for abi in "${!targets[@]}"; do
+  arch=$(echo ${targets[$abi]} | cut -d' ' -f1)
+  triple=$(echo ${targets[$abi]} | cut -d' ' -f2)
+  mkdir -p libs/$abi
+  echo "Building for $abi ($arch)..."
+  CGO_ENABLED=1 GOOS=android GOARCH=$arch \
+  CC=$NDK/${triple}${API}-clang \
+  go build -buildmode=c-shared -o libs/$abi/libapp.so .
+done
+```
+
+## 4. If you're building a shared library for use in an Android app (JNI)
+
+Use `-buildmode=c-shared` (as above) to produce a `.so` + header file that you call from Java/Kotlin via JNI, and drop the resulting `libs/<abi>/libapp.so` files straight into your Android Studio project's `app/src/main/jniLibs/` folder — Gradle will package them automatically per-ABI.
+
+## 5. Easier alternative: gomobile
+
+If you're building a mobile library (not a CLI binary), `gomobile` handles all of this NDK/triple wiring for you:
+
+```bash
+go install golang.org/x/mobile/cmd/gomobile@latest
+gomobile init
+gomobile bind -target=android -androidapi=21 -o app.aar ./mypkg
+```
+
+This produces an `.aar` with all ABIs bundled, ready to drop into an Android Studio project as a library dependency. This is the standard, "correct" way if you're calling Go from Kotlin/Java rather than writing a raw binary.
+
+---
+
+**Quick decision guide:**
+- Pure Go logic, calling from Java/Kotlin → use **gomobile bind**
+- Need fine-grained control / custom JNI / building a `.so` yourself → use **cgo + NDK clang per arch** as shown above
+- Standalone Go binary running inside Termux or similar (no APK) → plain `GOOS=android GOARCH=...` cross-compile, cgo often unnecessary
+
+Want me to put together a ready-to-run Makefile or a full Android Studio project skeleton with the `jniLibs` wiring set up?
+
