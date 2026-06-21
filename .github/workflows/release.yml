@@ -1,9 +1,6 @@
-name: Build & Release
+name: Manual Release (override)
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       version:

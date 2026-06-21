@@ -1,0 +1,126 @@
+name: CI — Auto Version & Build
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  version:
+    name: Bump Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: latest
+        run: |
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: $TAG"
+
+      - name: Bump version
+        id: bump
+        run: |
+          OLD="${{ steps.latest.outputs.tag }}"
+          OLD_NUM=$(echo "$OLD" | sed 's/v//')
+          IFS='.' read -r MAJ MIN PAT <<< "$OLD_NUM"
+          PAT=$((PAT + 1))
+          NEW="v$MAJ.$MIN.$PAT"
+          echo "version=$NEW" >> $GITHUB_OUTPUT
+          echo "tag=$NEW" >> $GITHUB_OUTPUT
+          echo "Bump: $OLD → $NEW"
+
+      - name: Create tag
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git tag ${{ steps.bump.outputs.tag }}
+          git push origin ${{ steps.bump.outputs.tag }}
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: stalkerhek-linux-amd64
+            goos: linux
+            goarch: amd64
+          - name: stalkerhek-linux-arm64
+            goos: linux
+            goarch: arm64
+          - name: stalkerhek-android-arm64
+            goos: android
+            goarch: arm64
+          - name: stalkerhek-android-arm32
+            goos: android
+            goarch: arm
+            goarm: "7"
+            cgo: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install NDK (ARM32 CGO)
+        if: matrix.cgo
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+          unzip -q android-ndk-r26d-linux.zip
+          echo "NDK_HOME=$PWD/android-ndk-r26d" >> $GITHUB_ENV
+
+      - name: Build
+        env:
+          CC: ${{ matrix.cgo && format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang', env.NDK_HOME) || '' }}
+        run: |
+          [ -n "$CC" ] && export CC
+          CGO_ENABLED=${{ matrix.cgo && '1' || '0' }} GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} go build -o ${{ matrix.name }} ./cmd/stalkerhek/
+          ls -la ${{ matrix.name }}
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
+
+  release:
+    name: GitHub Release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+
+      - name: Flatten
+        run: |
+          mkdir -p flat
+          find release -type f -executable -exec cp {} flat/ \;
+          ls -la flat/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: ${{ needs.version.outputs.version }}
+          tag_name: ${{ needs.version.outputs.tag }}
+          files: flat/*
+          generate_release_notes: true
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
