@@ -16,34 +16,21 @@ jobs:
       version: ${{ steps.bump.outputs.version }}
       tag: ${{ steps.bump.outputs.tag }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Get latest tag
-        id: latest
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - id: latest
+        run: echo "tag=$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)" >> $GITHUB_OUTPUT
+      - id: bump
         run: |
-          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "Latest tag: $TAG"
-
-      - name: Bump version
-        id: bump
-        run: |
-          OLD="${{ steps.latest.outputs.tag }}"
-          OLD_NUM=$(echo "$OLD" | sed 's/v//')
+          OLD_NUM=$(echo "${{ steps.latest.outputs.tag }}" | sed 's/v//')
           IFS='.' read -r MAJ MIN PAT <<< "$OLD_NUM"
-          PAT=$((PAT + 1))
-          NEW="v$MAJ.$MIN.$PAT"
+          NEW="v$MAJ.$MIN.$((PAT+1))"
           echo "version=$NEW" >> $GITHUB_OUTPUT
           echo "tag=$NEW" >> $GITHUB_OUTPUT
-          echo "Bump: $OLD → $NEW"
-
-      - name: Create tag
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
+          echo "$OLD_NUM → $NEW"
+      - run: |
+          git config user.name github-actions
+          git config user.email actions@github.com
           git tag ${{ steps.bump.outputs.tag }}
           git push origin ${{ steps.bump.outputs.tag }}
 
@@ -54,137 +41,77 @@ jobs:
     strategy:
       matrix:
         include:
-          - name: stalkerhek-linux-amd64
-            goos: linux
-            goarch: amd64
-          - name: stalkerhek-linux-arm64
-            goos: linux
-            goarch: arm64
-          - name: stalkerhek-android-arm64
-            goos: android
-            goarch: arm64
-          - name: stalkerhek-android-arm32
-            goos: android
-            goarch: arm
-            goarm: "7"
-            cgo: true
-          - name: stalkerhek-android-x86_64
-            goos: android
-            goarch: amd64
+          - {name: stalkerhek-linux-amd64, goos: linux, goarch: amd64}
+          - {name: stalkerhek-linux-arm64, goos: linux, goarch: arm64}
+          - {name: stalkerhek-linux-arm32, goos: linux, goarch: arm, goarm: "7"}
+          - {name: stalkerhek-android-arm64, goos: android, goarch: arm64}
+          - {name: stalkerhek-android-arm32, goos: android, goarch: arm, goarm: "7", cgo: true}
+          - {name: stalkerhek-android-x86_64, goos: android, goarch: amd64}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-
-      - name: Install NDK (ARM32 CGO)
-        if: matrix.cgo
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.22'}
+      - if: matrix.cgo
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
           unzip -q android-ndk-r26d-linux.zip
-          echo "NDK_HOME=$PWD/android-ndk-r26d" >> $GITHUB_ENV
-
-      - name: Build
-        env:
-          CC: ${{ matrix.cgo && format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang', env.NDK_HOME) || '' }}
-        run: |
-          [ -n "$CC" ] && export CC
+          echo "NDK=$PWD/android-ndk-r26d" >> $GITHUB_ENV
+      - run: |
+          [ -n "$NDK" ] && export CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang"
           CGO_ENABLED=${{ matrix.cgo && '1' || '0' }} GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} go build -o ${{ matrix.name }} ./cmd/stalkerhek/
-          ls -la ${{ matrix.name }}
-
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.name }}
-          path: ${{ matrix.name }}
+      - uses: actions/upload-artifact@v4
+        with: {name: ${{ matrix.name }}, path: ${{ matrix.name }}}
 
   apk:
     name: Build APK
     needs: [version, build]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {java-version: '17', distribution: 'temurin'}
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Set up Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-
-      - name: Download ARM64 binary
-        uses: actions/download-artifact@v4
         with:
-          name: stalkerhek-android-arm64
-          path: android/app/src/main/assets/
+          packages: 'platforms;android-35 build-tools;35.0.0'
 
-      - name: Download ARM32 binary
+      - name: Download Android binaries
         uses: actions/download-artifact@v4
-        with:
-          name: stalkerhek-android-arm32
-          path: android/app/src/main/assets/
+        with: {path: android/app/src/main/assets}
 
-      - name: Download x86_64 binary
-        uses: actions/download-artifact@v4
-        with:
-          name: stalkerhek-android-x86_64
-          path: android/app/src/main/assets/
-
-      - name: Rename binaries
+      - name: Organize binaries
         run: |
-          mv android/app/src/main/assets/stalkerhek-android-arm64 android/app/src/main/assets/stalkerhek-arm64
-          mv android/app/src/main/assets/stalkerhek-android-arm32 android/app/src/main/assets/stalkerhek-arm
-          mv android/app/src/main/assets/stalkerhek-android-x86_64 android/app/src/main/assets/stalkerhek-x86_64
+          mv android/app/src/main/assets/stalkerhek-android-arm64/* android/app/src/main/assets/stalkerhek-arm64
+          mv android/app/src/main/assets/stalkerhek-android-arm32/* android/app/src/main/assets/stalkerhek-arm
+          mv android/app/src/main/assets/stalkerhek-android-x86_64/* android/app/src/main/assets/stalkerhek-x86_64
           ls -la android/app/src/main/assets/
 
       - name: Build APK
         working-directory: android
         run: |
-          chmod +x gradlew 2>/dev/null || true
-          ./gradlew assembleRelease 2>/dev/null || gradle assembleRelease 2>/dev/null || {
-            echo "Gradle not available - creating APK manually"
-            mkdir -p app/build/outputs/apk/release
-            cd app/build/outputs/apk/release
-            # APK is just a ZIP - create minimal one if gradle fails
-            echo "APK build requires Android Studio or gradle. Use binaries from release instead." > README.txt
-          }
-          find . -name '*.apk' -exec cp {} $GITHUB_WORKSPACE/stalkerhek.apk \; 2>/dev/null || true
+          ./gradlew assembleRelease
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
-        with:
-          name: stalkerhek-apk
-          path: stalkerhek.apk
+        with: {name: stalkerhek-apk, path: android/app/build/outputs/apk/release/*.apk}
 
   release:
     name: GitHub Release
     needs: [version, build, apk]
     runs-on: ubuntu-latest
     steps:
-      - name: Download binaries
-        uses: actions/download-artifact@v4
-        with:
-          path: release
-
-      - name: Flatten
-        run: |
+      - uses: actions/download-artifact@v4
+        with: {path: release}
+      - run: |
           mkdir -p flat
-          find release -type f -executable -exec cp {} flat/ \;
+          find release -type f \( -executable -o -name '*.apk' \) -exec cp {} flat/ \;
           ls -la flat/
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v1
         with:
           name: ${{ needs.version.outputs.version }}
           tag_name: ${{ needs.version.outputs.tag }}
           files: flat/*
           generate_release_notes: true
-          draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
