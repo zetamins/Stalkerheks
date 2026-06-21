@@ -68,6 +68,9 @@ jobs:
             goarch: arm
             goarm: "7"
             cgo: true
+          - name: stalkerhek-android-x86_64
+            goos: android
+            goarch: amd64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -127,10 +130,17 @@ jobs:
           name: stalkerhek-android-arm32
           path: android/app/src/main/assets/
 
+      - name: Download x86_64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: stalkerhek-android-x86_64
+          path: android/app/src/main/assets/
+
       - name: Rename binaries
         run: |
           mv android/app/src/main/assets/stalkerhek-android-arm64 android/app/src/main/assets/stalkerhek-arm64
-          mv android/app/src/main/assets/stalkerhek-android-arm32 android/app/src/main/assets/stalkerhek-arm 2>/dev/null || true
+          mv android/app/src/main/assets/stalkerhek-android-arm32 android/app/src/main/assets/stalkerhek-arm
+          mv android/app/src/main/assets/stalkerhek-android-x86_64 android/app/src/main/assets/stalkerhek-x86_64
           ls -la android/app/src/main/assets/
 
       - name: Build APK
