@@ -43,6 +43,21 @@ public class ServerService extends Service {
         // The binary is bundled as libstalkerhek.so in jniLibs/<abi>/.
         final String dbDir = getFilesDir().getAbsolutePath();
         final String binPath = getApplicationInfo().nativeLibraryDir + "/libstalkerhek.so";
+        final String dbPath = dbDir + "/stalkerhek.db";
+
+        // Pre-create database with default profile so the server can start
+        try {
+            java.io.File dbFile = new java.io.File(dbPath);
+            if (!dbFile.exists()) {
+                String defaultProfile = "{\"default\":{\"name\":\"default\",\"portal\":{\"model\":\"MAG254\",\"serial_number\":\"0000000000000\",\"device_id\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"device_id2\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"signature\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"mac\":\"00:00:00:00:00:00\",\"url\":\"http://example.com/c/\",\"time_zone\":\"Europe/London\",\"token\":\"\"},\"services\":{\"proxy_bind\":\"0.0.0.0:8888\",\"hls_bind\":\"0.0.0.0:9999\"},\"dashboard\":{\"bind\":\"0.0.0.0:8080\",\"profiles_dir\":\".\"}}}";
+                java.io.FileOutputStream fos = new java.io.FileOutputStream(dbFile);
+                fos.write(defaultProfile.getBytes());
+                fos.close();
+                android.util.Log.i("Stalkerhek", "Default DB created at " + dbPath);
+            }
+        } catch (Exception e) {
+            android.util.Log.e("Stalkerhek", "DB creation failed", e);
+        }
 
         new Thread(() -> {
             try {
