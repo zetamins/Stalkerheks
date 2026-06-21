@@ -1,4 +1,13 @@
-CGO enabled: GOARCH=arm64 CC=/home/runner/work/Stalkerheks/Stalkerheks/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
+Build stalkerhek-android-arm32
+failed now in 33s
+Search logs
+1s
+1s
+1s
+18s
+9s
+Run NAME="stalkerhek-android-arm32"
+CGO enabled for ARM32: CC=/home/runner/work/Stalkerheks/Stalkerheks/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang
 # runtime/cgo
 gcc_amd64.S:27:8: error: unknown token in expression
  pushq %rbx
@@ -97,3 +106,7 @@ gcc_amd64.S:50:7: error: invalid operand
  popq %rbx
       ^
 Error: Process completed with exit code 1.
+0s
+0s
+0s
+

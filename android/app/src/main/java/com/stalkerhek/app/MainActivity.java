@@ -197,8 +197,7 @@ public class MainActivity extends Activity {
         final String assetName;
         String abi = android.os.Build.SUPPORTED_ABIS[0];
         if (abi.contains("x86_64")) assetName = "stalkerhek-x86_64";
-        else if (abi.contains("arm64")) assetName = "stalkerhek-arm64";
-        else assetName = "stalkerhek-arm";
+        else assetName = "stalkerhek-arm64"; // ARM64 covers all modern devices
         new Thread(() -> {
             try {
                 // Copy binary from assets to internal storage
