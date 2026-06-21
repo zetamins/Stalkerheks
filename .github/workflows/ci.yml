@@ -57,16 +57,21 @@ jobs:
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
           unzip -q android-ndk-r26d-linux.zip
-          echo "NDK=$PWD/android-ndk-r26d" >> $GITHUB_ENV
+          ls android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi*-clang
       - name: Build
+        env:
+          NDK_PATH: ${{ github.workspace }}/android-ndk-r26d
         run: |
-          if echo "${{ matrix.name }}" | grep -q arm32; then
-            export CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang"
-            CGO_ENABLED=1
+          NAME="${{ matrix.name }}"
+          if echo "$NAME" | grep -q 'arm32'; then
+            export CC="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang"
+            export CGO_ENABLED=1
+            echo "CGO ARM32 build with CC=$CC"
           else
-            CGO_ENABLED=0
+            export CGO_ENABLED=0
           fi
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} go build -o ${{ matrix.name }} ./cmd/stalkerhek/
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} go build -o "$NAME" ./cmd/stalkerhek/
+          file "$NAME"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
