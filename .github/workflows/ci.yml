@@ -46,17 +46,42 @@ jobs:
           - {name: stalkerhek-linux-arm64, goos: linux, goarch: arm64}
           - {name: stalkerhek-linux-arm32, goos: linux, goarch: arm, goarm: "7"}
           - {name: stalkerhek-android-arm64, goos: android, goarch: arm64}
+          - {name: stalkerhek-android-arm32, goos: android, goarch: arm, goarm: "7"}
           - {name: stalkerhek-android-x86_64, goos: android, goarch: amd64}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+      - name: Setup NDK (for Android CGO builds)
+        run: |
+          wget --timeout=120 -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
+          unzip -q android-ndk-r26b-linux.zip
+          echo "NDK=$PWD/android-ndk-r26b" >> $GITHUB_ENV
+          ls "$PWD/android-ndk-r26b/toolchains/llvm/prebuilt/linux-x86_64/bin/" | head -5
       - name: Build
         run: |
-          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} \
-            go build -o ${{ matrix.name }} ./cmd/stalkerhek/
-          file ${{ matrix.name }}
+          NAME="${{ matrix.name }}"
+          GOOS=${{ matrix.goos }}
+          GOARCH=${{ matrix.goarch }}
+          GOARM=${{ matrix.goarm }}
+          CGO_ENABLED=0
+
+          if [ "$GOOS" = "android" ]; then
+            CGO_ENABLED=1
+            TARGET="$GOARCH"
+            [ "$TARGET" = "arm" ] && TARGET="armv7a-linux-androideabi"
+            [ "$TARGET" = "arm64" ] && TARGET="aarch64-linux-android"
+            [ "$TARGET" = "amd64" ] && TARGET="x86_64-linux-android"
+            export CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET}34-clang"
+            export CXX="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET}34-clang++"
+            export CGO_CFLAGS="--sysroot=$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+            export CGO_LDFLAGS="--sysroot=$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+            echo "Android CGO: ARCH=$GOARCH CC=$CC"
+          fi
+
+          go build -o "$NAME" ./cmd/stalkerhek/
+          file "$NAME"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
@@ -81,6 +106,7 @@ jobs:
       - name: Organize binaries
         run: |
           mv android/app/src/main/assets/stalkerhek-android-arm64/* android/app/src/main/assets/stalkerhek-arm64
+          mv android/app/src/main/assets/stalkerhek-android-arm32/* android/app/src/main/assets/stalkerhek-arm
           mv android/app/src/main/assets/stalkerhek-android-x86_64/* android/app/src/main/assets/stalkerhek-x86_64
           ls -la android/app/src/main/assets/
       - name: Build APK
