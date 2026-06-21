@@ -57,8 +57,11 @@ a{color:var(--brand);text-decoration:none}a:hover{color:var(--brand-hover);text-
 .toast{position:fixed;bottom:24px;right:24px;z-index:300;padding:12px 20px;border-radius:10px;font-size:14px;font-weight:600;animation:slideUp .3s ease}
 .toast-success{background:var(--ok);color:#000}
 .toast-error{background:var(--bad);color:#fff}
+.connect-grid{display:flex;flex-direction:column;align-items:center;gap:24px}
+.connect-card{padding:32px 20px}
 @keyframes slideUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
 @media(max-width:768px){.grid{grid-template-columns:1fr}.form-row{grid-template-columns:1fr}.topbar{flex-direction:column;align-items:flex-start}}
+@media(min-width:1920px){.wrap{max-width:1600px;gap:28px}.topbar{padding:22px 32px;border-radius:18px}.topbar .logo{font-size:28px}.tab{padding:14px 26px;font-size:17px;border-radius:12px}.btn{padding:14px 26px;font-size:17px;border-radius:12px}.card{padding:28px;border-radius:18px}.card-title{font-size:22px}.card-subtitle{font-size:17px}.card-info{font-size:16px}.status{padding:6px 16px;font-size:16px}.port-tag{font-size:14px}.btn-sm{padding:10px 18px;font-size:16px}.form-group label{font-size:16px}.form-group input{padding:14px 18px;font-size:17px;border-radius:12px}.log-viewer{font-size:15px;max-height:500px}.connect-grid{flex-direction:row!important;justify-content:center!important;gap:60px!important}.connect-card{padding:40px!important}.connect-qr{width:320px!important;height:320px!important}.connect-url{padding:16px!important;font-size:18px!important}.connect-url code{font-size:20px!important}}
 </style>
 </head>
 <body>
@@ -94,15 +97,16 @@ async function showConnect(){
   const qrURL='https://api.qrserver.com/v1/create-qr-code/?size=200x200&data='+encodeURIComponent(dashURL);
   document.getElementById('content').className='';
   document.getElementById('content').innerHTML=
-    '<div class="card" style="text-align:center;grid-column:1/-1;padding:32px 20px">'+
-    '<div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:6px"><div class="dot-indicator dot-green" style="width:10px;height:10px"></div><span style="font-size:16px;font-weight:700">'+(active?'Active: '+esc(active.name):'No profiles')+'</span></div>'+
-    '<p style="color:var(--muted);font-size:13px;margin-bottom:20px">Scan QR to open dashboard on your phone</p>'+
-    '<img src="'+qrURL+'" alt="QR Code" style="border-radius:12px;background:#fff;padding:8px;width:200px;height:200px" onerror="this.src=\'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect width=%22200%22 height=%22200%22 fill=%22%23fff%22/><text x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 font-size=%2214%22 fill=%22%23000%22>QR unavailable</text></svg>\'">'+
-    '<div style="margin-top:24px;display:grid;gap:8px;max-width:500px;margin-left:auto;margin-right:auto">'+
-    '<div class="card-info" style="justify-content:center;padding:10px;background:var(--panel2);border-radius:8px"><i class="fa-solid fa-tv"></i><span>STB Portal: <code style="color:var(--brand)">'+esc(proxyURL)+'</code></span></div>'+
-    '<div class="card-info" style="justify-content:center;padding:10px;background:var(--panel2);border-radius:8px"><i class="fa-solid fa-play"></i><span>HLS Streams: <code style="color:var(--brand)">'+esc(hlsURL)+'&lt;channel&gt;</code></span></div>'+
-    '<div class="card-info" style="justify-content:center;padding:10px;background:var(--panel2);border-radius:8px"><i class="fa-solid fa-gauge"></i><span>Dashboard: <code style="color:var(--brand)">'+esc(dashURL)+'</code></span></div>'+
-    '</div>'+
+    '<div class="card connect-card" style="text-align:center;grid-column:1/-1;padding:32px 20px">'+
+    '<div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:20px"><div class="dot-indicator dot-green" style="width:10px;height:10px"></div><span style="font-size:16px;font-weight:700">'+(active?'Active: '+esc(active.name):'No profiles')+'</span></div>'+
+    '<div class="connect-grid">'+
+    '<div style="text-align:center"><p style="color:var(--muted);font-size:13px;margin-bottom:10px">Scan with phone</p>'+
+    '<img src="'+qrURL+'" class="connect-qr" alt="QR Code" style="border-radius:12px;background:#fff;padding:8px;width:200px;height:200px" onerror="this.src=\'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect width=%22200%22 height=%22200%22 fill=%22%23fff%22/><text x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 font-size=%2214%22 fill=%22%23000%22>QR unavailable</text></svg>\'"></div>'+
+    '<div style="display:grid;gap:8px">'+
+    '<div class="card-info connect-url" style="justify-content:flex-start;padding:10px;background:var(--panel2);border-radius:8px"><i class="fa-solid fa-tv"></i><span>STB Portal: <code style="color:var(--brand)">'+esc(proxyURL)+'</code></span></div>'+
+    '<div class="card-info connect-url" style="justify-content:flex-start;padding:10px;background:var(--panel2);border-radius:8px"><i class="fa-solid fa-play"></i><span>HLS Streams: <code style="color:var(--brand)">'+esc(hlsURL)+'&lt;channel&gt;</code></span></div>'+
+    '<div class="card-info connect-url" style="justify-content:flex-start;padding:10px;background:var(--panel2);border-radius:8px"><i class="fa-solid fa-gauge"></i><span>Dashboard: <code style="color:var(--brand)">'+esc(dashURL)+'</code></span></div>'+
+    '</div></div>'+
     (active?'<div style="margin-top:16px;font-size:12px;color:var(--muted)">Model: '+esc(active.portal?.model||'—')+' | MAC: '+esc(active.portal?.mac||'—')+'</div>':'')+
     '</div>';
 }
