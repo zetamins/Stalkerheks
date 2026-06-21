@@ -11,6 +11,7 @@ import android.view.View;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.WebSettings;
+import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
@@ -36,6 +37,66 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // Show privacy disclosure on first launch (Play Protect compliance).
+        // This app runs a LOCAL IPTV proxy — no data leaves your device.
+        if (!getSharedPreferences("stalkerhek", MODE_PRIVATE).getBoolean("agreed", false)) {
+            showPrivacyDialog();
+            return;
+        }
+
+        startServer();
+    }
+
+    private void showPrivacyDialog() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setGravity(Gravity.CENTER);
+        layout.setBackgroundColor(Color.parseColor("#0a0f0a"));
+        layout.setPadding(40, 40, 40, 40);
+
+        TextView icon = new TextView(this);
+        icon.setText("📡");
+        icon.setTextSize(48);
+        icon.setGravity(Gravity.CENTER);
+        layout.addView(icon);
+
+        TextView title = new TextView(this);
+        title.setText("Stalkerhek");
+        title.setTextColor(Color.parseColor("#e0e6e0"));
+        title.setTextSize(22);
+        title.setGravity(Gravity.CENTER);
+        title.setPadding(0, 16, 0, 12);
+        layout.addView(title);
+
+        TextView body = new TextView(this);
+        body.setText("This app runs a local IPTV proxy server on your device.\n\n" +
+            "• No data is collected or sent anywhere\n" +
+            "• All traffic stays on your local network\n" +
+            "• Only network access is used (no SMS, files, contacts)\n" +
+            "• Open-source — github.com/zetamins/Stalkerheks\n\n" +
+            "This is a legitimate server tool, not malware.\n" +
+            "If Play Protect warned you, tap 'More details'\n" +
+            "and choose 'Install anyway'.");
+        body.setTextColor(Color.parseColor("#9aaa9a"));
+        body.setTextSize(14);
+        body.setGravity(Gravity.CENTER);
+        layout.addView(body);
+
+        android.widget.Button agree = new android.widget.Button(this);
+        agree.setText("I Understand — Start Server");
+        agree.setBackgroundColor(Color.parseColor("#2d7a4e"));
+        agree.setTextColor(Color.WHITE);
+        agree.setPadding(32, 16, 32, 16);
+        agree.setOnClickListener(v -> {
+            getSharedPreferences("stalkerhek", MODE_PRIVATE).edit().putBoolean("agreed", true).apply();
+            startServer();
+        });
+        layout.addView(agree);
+
+        setContentView(layout);
+    }
+
+    private void startServer() {
         FrameLayout root = new FrameLayout(this);
 
         // ---- SPLASH SCREEN ----
