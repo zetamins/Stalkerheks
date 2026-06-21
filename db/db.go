@@ -124,27 +124,7 @@ func (s *Store) GetAll() []Profile {
 func (s *Store) Save(p Profile) error {
 	m, _ := s.readAll()
 
-	// Auto-derive device IDs
-	if p.Portal.DeviceID2 == "" && p.Portal.DeviceID != "" {
-		h := sha256.New()
-		h.Write([]byte(p.Portal.DeviceID + ":device_id:" + p.Portal.Token))
-		p.Portal.DeviceID2 = hex.EncodeToString(h.Sum(nil))
-	}
-	if p.Portal.Signature == "" && p.Portal.DeviceID != "" {
-		h := sha256.New()
-		h.Write([]byte(p.Portal.DeviceID + ":signature"))
-		p.Portal.Signature = hex.EncodeToString(h.Sum(nil))
-	}
-
-	// Auto-append API endpoint
-	p.Portal.URL = normalizeURL(p.Portal.URL)
-
-	// Auto-generate token if empty
-	if p.Portal.Token == "" {
-		p.Portal.Token = randomToken()
-	}
-
-	// Defaults
+	// Apply defaults first
 	if p.Portal.Model == "" {
 		p.Portal.Model = "MAG254"
 	}
@@ -156,6 +136,26 @@ func (s *Store) Save(p Profile) error {
 	}
 	if p.Services.HLSBind == "" {
 		p.Services.HLSBind = "0.0.0.0:9999"
+	}
+
+	// Auto-generate token if empty (must be before device ID derivation)
+	if p.Portal.Token == "" {
+		p.Portal.Token = randomToken()
+	}
+
+	// Auto-append API endpoint
+	p.Portal.URL = normalizeURL(p.Portal.URL)
+
+	// Auto-derive device IDs from device_id + token
+	if p.Portal.DeviceID2 == "" && p.Portal.DeviceID != "" {
+		h := sha256.New()
+		h.Write([]byte(p.Portal.DeviceID + ":device_id:" + p.Portal.Token))
+		p.Portal.DeviceID2 = hex.EncodeToString(h.Sum(nil))
+	}
+	if p.Portal.Signature == "" && p.Portal.DeviceID != "" {
+		h := sha256.New()
+		h.Write([]byte(p.Portal.DeviceID + ":signature"))
+		p.Portal.Signature = hex.EncodeToString(h.Sum(nil))
 	}
 
 	m[p.Name] = p
