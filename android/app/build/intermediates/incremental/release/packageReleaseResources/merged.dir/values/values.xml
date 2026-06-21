@@ -1,4 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#0a0f0a</color>
+    <style name="Theme.Stalkerhek" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">#2D7A4E</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#1B4D30</item>
+        <item name="colorOnPrimaryContainer">#B8F5CD</item>
+        <item name="colorSecondary">#3FB970</item>
+        <item name="colorOnSecondary">#003920</item>
+        <item name="colorSurface">#0A0F0A</item>
+        <item name="colorOnSurface">#E0E6E0</item>
+        <item name="colorSurfaceVariant">#0D1410</item>
+        <item name="colorOnSurfaceVariant">#9AAAA9</item>
+        <item name="colorError">#E85D4D</item>
+        <item name="colorOnError">#FFFFFF</item>
+        <item name="android:statusBarColor">#0A0F0A</item>
+        <item name="android:navigationBarColor">#0A0F0A</item>
+    </style>
 </resources>
