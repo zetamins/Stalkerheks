@@ -75,7 +75,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			log.Println("Starting dashboard...")
-			dashboard.Start(*flagDBDir, c.Dashboard.Bind, store)
+			dashboard.Start(*flagDBDir, c.Dashboard.Bind, store, *flagProfile)
 			wg.Done()
 		}()
 	}

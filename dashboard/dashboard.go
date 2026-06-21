@@ -22,10 +22,15 @@ var (
 )
 
 // Start initializes the dashboard HTTP server.
-func Start(dir string, bind string, s *db.Store) {
+func Start(dir string, bind string, s *db.Store, profileName string) {
 	store = s
 	profDir = dir
 	os.MkdirAll(profDir, 0755)
+
+	// Register the main process so the dashboard shows it as running
+	if profileName != "" {
+		processes[profileName] = &os.Process{Pid: os.Getpid()}
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", serveDashboard)
@@ -139,7 +144,11 @@ func handleProfileStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Binary == "" {
-		req.Binary = "./stalkerhek"
+		if exe, err := os.Executable(); err == nil {
+			req.Binary = exe
+		} else {
+			req.Binary = "./stalkerhek"
+		}
 	}
 
 	if _, ok := store.Get(req.Name); !ok {
@@ -153,14 +162,15 @@ func handleProfileStart(w http.ResponseWriter, r *http.Request) {
 	stopProcess(req.Name)
 
 	cmd := exec.Command(req.Binary, "-profile", req.Name, "-db", profDir)
-	cmd.Stdout, _ = os.Create(filepath.Join(profDir, req.Name+".log"))
-	cmd.Stderr = cmd.Stdout
+	logFile, _ := os.Create(filepath.Join(profDir, req.Name+".log"))
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
-		writeJSON(w, map[string]string{"error": err.Error()})
+		writeJSON(w, map[string]string{"error": "failed to start: " + err.Error()})
 		return
 	}
 	processes[req.Name] = cmd.Process
-	log.Printf("Started profile %s (PID %d)", req.Name, cmd.Process.Pid)
+	log.Printf("Started profile %s (PID %d, binary %s)", req.Name, cmd.Process.Pid, req.Binary)
 	writeJSON(w, map[string]interface{}{"ok": "started", "pid": cmd.Process.Pid})
 }
 

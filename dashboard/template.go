@@ -145,7 +145,8 @@ async function deleteProfile(name){
 
 async function startProfile(name){
   const res=await fetch(API+'/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,binary:''})});
-  if(res.ok){toast('Starting...');setTimeout(loadProfiles,2500)}else toast('Failed to start','error');
+  const data=await res.json();
+  if(res.ok){toast('Started (PID '+data.pid+')');setTimeout(loadProfiles,3000);setTimeout(loadProfiles,6000)}else toast(data.error||'Failed to start','error');
 }
 
 async function stopProfile(name){
