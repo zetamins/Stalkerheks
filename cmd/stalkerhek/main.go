@@ -6,32 +6,40 @@ import (
 	"sync"
 
 	"github.com/erkexzcx/stalkerhek/dashboard"
+	"github.com/erkexzcx/stalkerhek/db"
 	"github.com/erkexzcx/stalkerhek/hls"
 	"github.com/erkexzcx/stalkerhek/proxy"
 	"github.com/erkexzcx/stalkerhek/stalker"
 )
 
-var flagConfig = flag.String("config", "stalkerhek.yml", "path to the config file")
+var (
+	flagProfile = flag.String("profile", "default", "profile name to load from stalkerhek.db")
+	flagDBDir   = flag.String("db", ".", "directory containing stalkerhek.db")
+)
 
 func main() {
-	// Change flags on the default logger, so it print's line numbers as well.
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-
 	flag.Parse()
 
-	// Load configuration from file into Portal struct
-	c, err := stalker.ReadConfig(flagConfig)
+	// Open profile database
+	store, err := db.Open(*flagDBDir + "/stalkerhek.db")
 	if err != nil {
-		log.Fatalln(err)
+		log.Fatalln("Failed to open database:", err)
 	}
 
-	// Authenticate (connect) to Stalker portal and keep-alive it's connection.
+	// Load profile
+	c, err := stalker.LoadProfile(store, *flagProfile)
+	if err != nil {
+		log.Fatalln("Failed to load profile:", err)
+	}
+
+	// Connect to Stalker portal
 	log.Println("Connecting to Stalker middleware...")
 	if err = c.Portal.Start(); err != nil {
 		log.Fatalln(err)
 	}
 
-	// Retrieve channels list.
+	// Retrieve channels list
 	log.Println("Retrieving channels list from Stalker middleware...")
 	channels, err := c.Portal.RetrieveChannels()
 	if err != nil {
@@ -67,13 +75,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			log.Println("Starting dashboard...")
-			if c.Dashboard.BinaryPath == "" {
-				c.Dashboard.BinaryPath = "./stalkerhek"
-			}
-			if c.Dashboard.ProfilesDir == "" {
-				c.Dashboard.ProfilesDir = "./profiles"
-			}
-			dashboard.Start(c.Dashboard.ProfilesDir, c.Dashboard.Bind)
+			dashboard.Start(*flagDBDir, c.Dashboard.Bind, store)
 			wg.Done()
 		}()
 	}

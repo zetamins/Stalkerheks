@@ -84,10 +84,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 </div>
 
 <div id="main">
-  <div id="header">
-    <h1>Profiles</h1>
-    <button class="btn btn-accent" onclick="addProfile()">+ New Profile</button>
-  </div>
+  <div id="header"><h1>Profiles</h1><button class="btn btn-accent" onclick="addProfile()">+ New Profile</button></div>
   <div id="content" class="grid"></div>
 </div>
 
@@ -96,8 +93,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 
 <script>
 const API='/api/profiles';
-
-function showProfiles(){loadProfiles()}
 
 async function loadProfiles(){
   const res=await fetch(API);
@@ -108,9 +103,9 @@ async function loadProfiles(){
     return;
   }
   grid.innerHTML=profiles.map(p=>'<div class="card">'+
-    '<div class="card-header"><div><div class="card-title">'+esc(p.name)+'</div><div class="card-subtitle"><span class="port-tag">proxy '+esc(p.config.proxy_bind||'—')+'</span><span class="port-tag">hls '+esc(p.config.hls_bind||'—')+'</span></div></div>'+
-    '<span class="status status-'+p.status+'"><span class="dot-indicator '+(p.status==='running'?'dot-green':'dot-gray')+'"></span>'+p.status+'</span></div>'+
-    '<div style="font-size:12px;color:var(--muted)">'+esc(p.config.model)+' | '+esc(p.config.url)+'</div>'+
+    '<div class="card-header"><div><div class="card-title">'+esc(p.name)+'</div><div class="card-subtitle"><span class="port-tag">proxy '+esc(p.services?.proxy_bind||'—')+'</span><span class="port-tag">hls '+esc(p.services?.hls_bind||'—')+'</span></div></div>'+
+    '<span class="status status-'+(p.status||'stopped')+'"><span class="dot-indicator '+(p.status==='running'?'dot-green':'dot-gray')+'"></span>'+(p.status||'stopped')+'</span></div>'+
+    '<div style="font-size:12px;color:var(--muted)">'+esc(p.portal?.model||'')+' | '+esc(p.portal?.url||'')+'</div>'+
     (p.status==='running'?'<div style="font-size:12px;color:var(--muted);margin-top:4px">PID: '+p.pid+'</div>':'')+
     '<div class="card-actions">'+
     (p.status==='running'
@@ -122,19 +117,12 @@ async function loadProfiles(){
     '</div></div>').join('');
 }
 
-function addProfile(editName){
-  const p=editName?null:null;
-  showModal(editName?'Edit: '+editName:'New Profile', formHTML({
-    name:'',model:'MAG254',serial_number:'',device_id:'',mac:'00:00:00:00:00:00',
-    url:'http://',time_zone:'Europe/Vilnius',token:'',proxy_bind:'0.0.0.0:8888',hls_bind:'0.0.0.0:9999'
-  }),async()=>{
+function addProfile(){
+  showModal('New Profile',formHTML({}),async()=>{
     const cfg=readForm();
-    if(!cfg.name||!cfg.url||!cfg.mac){toast('Name, URL and MAC are required','error');return;}
-    const body=JSON.stringify({name:cfg.name,config:cfg});
-    const method=editName?'PUT':'POST';
-    const url=editName?API+'/'+editName:API;
-    const res=await fetch(url,{method,headers:{'Content-Type':'application/json'},body});
-    if(res.ok){toast(editName?'Profile saved':'Profile created');loadProfiles()}else toast('Failed','error');
+    if(!cfg.name||!cfg.portal?.url||!cfg.portal?.mac){toast('Name, URL and MAC are required','error');return;}
+    const res=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+    if(res.ok){toast('Profile created');loadProfiles()}else toast('Failed','error');
   });
 }
 
@@ -142,9 +130,9 @@ async function editProfile(name){
   const res=await fetch(API);const profiles=await res.json();
   const p=profiles.find(p=>p.name===name);
   if(!p)return;
-  showModal('Edit: '+name,formHTML(p.config),async()=>{
+  showModal('Edit: '+name,formHTML(p),async()=>{
     const cfg=readForm();cfg.name=name;
-    const res=await fetch(API+'/'+name,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,config:cfg})});
+    const res=await fetch(API+'/'+name,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
     if(res.ok){toast('Profile saved');loadProfiles()}else toast('Failed','error');
   });
 }
@@ -172,31 +160,26 @@ async function viewLogs(name){
 }
 
 function formHTML(cfg){
-  return'<div class="form-row"><div class="form-group"><label>Profile Name *</label><input id="f-name" value="'+esc(cfg.name||'')+'" placeholder="my-profile"></div><div class="form-group"><label>Model</label><input id="f-model" value="'+esc(cfg.model||'MAG254')+'" placeholder="MAG254"></div></div>'+
-    '<div class="form-row"><div class="form-group"><label>Serial Number</label><input id="f-sn" value="'+esc(cfg.serial_number||'')+'" placeholder="0000000000000"></div><div class="form-group"><label>MAC Address *</label><input id="f-mac" value="'+esc(cfg.mac||'')+'" placeholder="00:00:00:00:00:00"></div></div>'+
-    '<div class="form-group"><label>Device ID</label><input id="f-device-id" value="'+esc(cfg.device_id||'')+'" placeholder="64-char hex — device_id2/signature auto-derived if empty"><div class="hint">Leave device_id2 and signature empty — they will be auto-generated from device_id</div></div>'+
-    '<div class="form-row"><div class="form-group"><label>Device ID2 (auto)</label><input id="f-device-id2" value="'+esc(cfg.device_id2||'')+'" placeholder="Auto-generated"></div><div class="form-group"><label>Signature (auto)</label><input id="f-signature" value="'+esc(cfg.signature||'')+'" placeholder="Auto-generated"></div></div>'+
-    '<div class="form-row"><div class="form-group"><label>Portal URL *</label><input id="f-url" value="'+esc(cfg.url||'')+'" placeholder="http://host:port/c/"><div class="hint">Just paste the panel URL — portal.php is auto-appended</div></div><div class="form-group"><label>Timezone</label><input id="f-tz" value="'+esc(cfg.time_zone||'Europe/Vilnius')+'" placeholder="Europe/Vilnius"></div></div>'+
-    '<div class="form-group"><label>Token</label><input id="f-token" value="'+esc(cfg.token||'')+'" placeholder="Leave empty to auto-generate"><div class="hint">Leave empty — a random token will be generated at startup</div></div>'+
-    '<div class="form-row"><div class="form-group"><label>Proxy Bind</label><input id="f-proxy-bind" value="'+esc(cfg.proxy_bind||'0.0.0.0:8888')+'" placeholder="0.0.0.0:8888"></div><div class="form-group"><label>HLS Bind</label><input id="f-hls-bind" value="'+esc(cfg.hls_bind||'0.0.0.0:9999')+'" placeholder="0.0.0.0:9999"></div></div>';
+  const p=cfg.portal||{};
+  const s=cfg.services||{};
+  return'<div class="form-row"><div class="form-group"><label>Profile Name *</label><input id="f-name" value="'+esc(cfg.name||'')+'" placeholder="my-profile"></div><div class="form-group"><label>Model</label><input id="f-model" value="'+esc(p.model||'MAG254')+'" placeholder="MAG254"></div></div>'+
+    '<div class="form-row"><div class="form-group"><label>Serial Number *</label><input id="f-sn" value="'+esc(p.serial_number||'')+'" placeholder="0000000000000"></div><div class="form-group"><label>MAC Address *</label><input id="f-mac" value="'+esc(p.mac||'')+'" placeholder="00:00:00:00:00:00"></div></div>'+
+    '<div class="form-group"><label>Device ID *</label><input id="f-device-id" value="'+esc(p.device_id||'')+'" placeholder="64-char hex"><div class="hint">device_id2 and signature are auto-generated if left empty</div></div>'+
+    '<div class="form-row"><div class="form-group"><label>Device ID2 (auto)</label><input id="f-device-id2" value="'+esc(p.device_id2||'')+'" placeholder="Auto-generated from device_id"></div><div class="form-group"><label>Signature (auto)</label><input id="f-signature" value="'+esc(p.signature||'')+'" placeholder="Auto-generated from device_id"></div></div>'+
+    '<div class="form-row"><div class="form-group"><label>Portal URL *</label><input id="f-url" value="'+esc(p.url||'')+'" placeholder="http://host:port/c/"><div class="hint">portal.php auto-appended</div></div><div class="form-group"><label>Timezone</label><input id="f-tz" value="'+esc(p.time_zone||'Europe/Vilnius')+'" placeholder="Europe/Vilnius"></div></div>'+
+    '<div class="form-group"><label>Token</label><input id="f-token" value="'+esc(p.token||'')+'" placeholder="Auto-generated if empty"></div>'+
+    '<div class="form-row"><div class="form-group"><label>Proxy Bind</label><input id="f-proxy-bind" value="'+esc(s.proxy_bind||'0.0.0.0:8888')+'" placeholder="0.0.0.0:8888"></div><div class="form-group"><label>HLS Bind</label><input id="f-hls-bind" value="'+esc(s.hls_bind||'0.0.0.0:9999')+'" placeholder="0.0.0.0:9999"></div></div>';
 }
 
 function readForm(){
   return{
-    name:document.getElementById('f-name')?.value||'',
-    model:document.getElementById('f-model')?.value||'MAG254',
-    serial_number:document.getElementById('f-sn')?.value||'',
-    device_id:document.getElementById('f-device-id')?.value||'',
-    device_id2:document.getElementById('f-device-id2')?.value||'',
-    signature:document.getElementById('f-signature')?.value||'',
-    mac:document.getElementById('f-mac')?.value||'',
-    url:document.getElementById('f-url')?.value||'',
-    time_zone:document.getElementById('f-tz')?.value||'Europe/Vilnius',
-    token:document.getElementById('f-token')?.value||'',
-    proxy_bind:document.getElementById('f-proxy-bind')?.value||'0.0.0.0:8888',
-    hls_bind:document.getElementById('f-hls-bind')?.value||'0.0.0.0:9999'
+    name:el('f-name'),portal:{model:el('f-model')||'MAG254',serial_number:el('f-sn'),device_id:el('f-device-id'),
+    device_id2:el('f-device-id2'),signature:el('f-signature'),mac:el('f-mac'),url:el('f-url'),
+    time_zone:el('f-tz')||'Europe/Vilnius',token:el('f-token')},
+    services:{proxy_bind:el('f-proxy-bind')||'0.0.0.0:8888',hls_bind:el('f-hls-bind')||'0.0.0.0:9999'}
   };
 }
+function el(id){return document.getElementById(id)?.value||''}
 
 function showModal(title,body,onSave){
   document.getElementById('modal-container').innerHTML=
@@ -206,20 +189,15 @@ function showModal(title,body,onSave){
     '<button class="btn btn-accent" id="modal-save">Save</button></div></div></div>';
   document.getElementById('modal-save').onclick=async()=>{await onSave();closeModal();};
 }
-
 function closeModal(){document.getElementById('modal-container').innerHTML='';}
-
 function toast(msg,type){
   type=type||'success';
   const el=document.createElement('div');el.className='toast toast-'+type;el.textContent=msg;
   document.getElementById('toast-container').appendChild(el);
   setTimeout(()=>el.remove(),2500);
 }
-
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
-
-loadProfiles();
-setInterval(loadProfiles,10000);
+loadProfiles();setInterval(loadProfiles,10000);
 </script>
 </body>
 </html>`
