@@ -22,6 +22,25 @@ GOOS=android GOARCH=arm go build -o android/app/src/main/assets/stalkerhek-arm .
 # 3. Build Android APK
 echo "Step 3: Building APK with Gradle..."
 cd android
+./gradlew assembleRelease
+
+# 4. Sign APK (v1+v2+v3)
+UNSIGNED="app/build/outputs/apk/release/app-release-unsigned.apk"
+SIGNED="stalkerhek-release.apk"
+if [ -f "$UNSIGNED" ]; then
+  echo "Step 4: Signing APK..."
+  SDK="${ANDROID_HOME:-$HOME/Android/Sdk}"
+  APKSIGNER=$(find "$SDK/build-tools" -name apksigner -type f 2>/dev/null | sort -r | head -1)
+  KEYSTORE="${STALKERHEK_KEYSTORE:-$HOME/stalkerhek.keystore}"
+  KEYPASS="${STALKERHEK_KEYPASS:-stalkerhek}"
+  if [ -n "$APKSIGNER" ] && [ -f "$KEYSTORE" ]; then
+    "$APKSIGNER" sign --ks "$KEYSTORE" --ks-pass "pass:$KEYPASS" --ks-key-alias stalkerhek --out "$SIGNED" "$UNSIGNED"
+    echo "Signed APK: android/$SIGNED"
+  else
+    cp "$UNSIGNED" "$SIGNED"
+    echo "Keystore not found — unsigned APK: android/$SIGNED"
+  fi
+fi
 if command -v gradlew &> /dev/null; then
     ./gradlew assembleRelease
 elif command -v gradle &> /dev/null; then
