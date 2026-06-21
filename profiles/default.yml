@@ -7,6 +7,7 @@ portal:
   mac: A0:BB:3E:02:3C:B6
   url: http://tres.4vps.info:80/c/portal.php
   time_zone: Europe/Vilnius
+  token: 
 
 hls:
   enabled: true
@@ -15,8 +16,3 @@ hls:
 proxy:
   enabled: true
   bind: 0.0.0.0:8888
-
-dashboard:
-  enabled: true
-  bind: 0.0.0.0:8080
-  profiles_dir: ./profiles

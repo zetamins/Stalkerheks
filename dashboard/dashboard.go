@@ -125,6 +125,9 @@ func handleProfiles(w http.ResponseWriter, r *http.Request) {
 		if p.Config.HLSBind == "" {
 			p.Config.HLSBind = "0.0.0.0:9999"
 		}
+		// Auto-append API endpoint: if URL doesn't end with .php,
+		// append portal.php (strips trailing slash first)
+		p.Config.URL = normalizePortalURL(p.Config.URL)
 		all[p.Name] = p
 		if err := saveAllProfiles(all); err != nil {
 			writeJSON(w, map[string]string{"error": err.Error()})
@@ -174,6 +177,7 @@ func handleProfileByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p.Name = name
+		p.Config.URL = normalizePortalURL(p.Config.URL)
 		if p.Config.DeviceID2 == "" && p.Config.DeviceID != "" {
 			h := sha256.New()
 			h.Write([]byte(p.Config.DeviceID + ":device_id:" + p.Config.Token))
@@ -285,6 +289,17 @@ func stopProfile(name string) {
 		delete(processes, name)
 		log.Printf("Stopped profile %s", name)
 	}
+}
+
+// normalizePortalURL ensures the URL points to the portal API endpoint.
+// If the user enters a base URL like "http://host:80/c/", it auto-appends
+// "portal.php" to form "http://host:80/c/portal.php".
+func normalizePortalURL(raw string) string {
+	raw = strings.TrimRight(raw, "/")
+	if strings.HasSuffix(raw, ".php") {
+		return raw
+	}
+	return raw + "/portal.php"
 }
 
 func generateYAML(c ProfileConfig) string {
