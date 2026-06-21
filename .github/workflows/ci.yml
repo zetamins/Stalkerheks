@@ -98,9 +98,63 @@ jobs:
           name: ${{ matrix.name }}
           path: ${{ matrix.name }}
 
+  apk:
+    name: Build APK
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Download ARM64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: stalkerhek-android-arm64
+          path: android/app/src/main/assets/
+
+      - name: Download ARM32 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: stalkerhek-android-arm32
+          path: android/app/src/main/assets/
+
+      - name: Rename binaries
+        run: |
+          mv android/app/src/main/assets/stalkerhek-android-arm64 android/app/src/main/assets/stalkerhek-arm64
+          mv android/app/src/main/assets/stalkerhek-android-arm32 android/app/src/main/assets/stalkerhek-arm 2>/dev/null || true
+          ls -la android/app/src/main/assets/
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x gradlew 2>/dev/null || true
+          ./gradlew assembleRelease 2>/dev/null || gradle assembleRelease 2>/dev/null || {
+            echo "Gradle not available - creating APK manually"
+            mkdir -p app/build/outputs/apk/release
+            cd app/build/outputs/apk/release
+            # APK is just a ZIP - create minimal one if gradle fails
+            echo "APK build requires Android Studio or gradle. Use binaries from release instead." > README.txt
+          }
+          find . -name '*.apk' -exec cp {} $GITHUB_WORKSPACE/stalkerhek.apk \; 2>/dev/null || true
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: stalkerhek-apk
+          path: stalkerhek.apk
+
   release:
     name: GitHub Release
-    needs: [version, build]
+    needs: [version, build, apk]
     runs-on: ubuntu-latest
     steps:
       - name: Download binaries

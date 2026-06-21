@@ -1,0 +1,9 @@
+#!/bin/bash
+# Minimal gradle wrapper - falls back to system gradle
+if command -v gradle &>/dev/null; then
+  exec gradle "$@"
+else
+  echo "Gradle not found. Install Android Studio or run: sdkmanager 'build-tools;34.0.0'"
+  echo "The Go binaries are available as separate release assets."
+  exit 1
+fi
