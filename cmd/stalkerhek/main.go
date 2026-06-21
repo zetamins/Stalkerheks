@@ -46,6 +46,8 @@ func main() {
 		wg.Add(1)
 		go func() {
 			log.Println("Starting HLS service...")
+			hls.SetUserAgent(c.Portal.Model)
+			hls.SetDeviceHeaders(c.Portal.MAC, c.Portal.Model, c.Portal.SerialNumber)
 			hls.Start(channels, c.HLS.Bind)
 			wg.Done()
 		}()

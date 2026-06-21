@@ -9,18 +9,11 @@ import (
 	"time"
 )
 
-// Start connects to stalker portal, authenticates, starts watchdog etc.
+// Start connects to stalker portal, reserves token, starts watchdog etc.
 func (p *Portal) Start() error {
 	// Reserve token in Stalker portal
 	if err := p.handshake(); err != nil {
 		return err
-	}
-
-	// Authorize token if credentials are given
-	if p.Username != "" && p.Password != "" {
-		if err := p.authenticate(); err != nil {
-			return err
-		}
 	}
 
 	// Run watchdog function once to check for errors:
@@ -28,12 +21,13 @@ func (p *Portal) Start() error {
 		return err
 	}
 
-	// Run watchdog function every 2 minutes:
+	// Run watchdog function every 2 minutes.
+	// Transient errors (502, timeouts) are logged but not fatal.
 	go func() {
 		for {
 			time.Sleep(2 * time.Minute)
 			if err := p.watchdogUpdate(); err != nil {
-				log.Fatalln(err)
+				log.Println("Watchdog update failed (will retry):", err)
 			}
 		}
 	}()
@@ -47,9 +41,10 @@ func (p *Portal) httpRequest(link string) ([]byte, error) {
 		return nil, err
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 4 rev: 2116 Mobile Safari/533.3")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) "+p.Model+" stbapp ver: 4 rev: 2116 Mobile Safari/533.3")
 	req.Header.Set("X-User-Agent", "Model: "+p.Model+"; Link: Ethernet")
 	req.Header.Set("Authorization", "Bearer "+p.Token)
+	req.Header.Set("SN", p.SerialNumber)
 
 	cookieText := "PHPSESSID=null; sn=" + url.QueryEscape(p.SerialNumber) + "; mac=" + url.QueryEscape(p.MAC) + "; stb_lang=en; timezone=" + url.QueryEscape(p.TimeZone) + ";"
 

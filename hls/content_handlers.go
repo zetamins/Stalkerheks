@@ -50,6 +50,8 @@ func handleContentUnknown(cr *ContentRequest) {
 		// Initiate new HLS channel
 		cr.ChannelRef.HLSLink = resp.Request.URL.String()
 		cr.ChannelRef.HLSLinkRoot = deleteAfterLastSlash(cr.ChannelRef.HLSLink)
+		// Start keep-alive refreshes to maintain stream session priority
+		cr.ChannelRef.startKeepAlive()
 	}
 
 	handleContent(cr)

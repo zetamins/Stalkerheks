@@ -5,8 +5,6 @@ portal:
   device_id2: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
   signature: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
   mac: 00:00:00:00:00:00
-  username: myusername # Delete this line if no credentials
-  password: mypassword # Delete this line if no credentials
   url: http://domain.example.com/stalker_portal/server/load.php
   time_zone: Europe/Vilnius
   token: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -18,4 +16,3 @@ hls:
 proxy:
   enabled: false
   bind: 0.0.0.0:8888
-  rewrite: false # EXPERIMENTAL! see https://github.com/erkexzcx/stalkerhek/pull/12#issue-607960283

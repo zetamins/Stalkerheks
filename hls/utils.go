@@ -1,15 +1,41 @@
 package hls
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
 	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
-const userAgent = "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 4 rev: 2116 Mobile Safari/533.3"
+var userAgent = "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 4 rev: 2116 Mobile Safari/533.3"
+
+// Device headers sent with every media download — the streaming server uses
+// these for device identification and stream priority assignment.
+var deviceMac, deviceModel, deviceSerial, deviceHash string
+
+// SetDeviceHeaders configures the device-identifying headers sent on media
+// requests. Real MAG STBs send Mac:, Model:, X-Hash:, and serial/version
+// headers on every HLS segment and VOD media download. Without these,
+// the streaming server cannot prioritize the device → 458 errors.
+func SetDeviceHeaders(mac, model, serial string) {
+	deviceMac = mac
+	deviceModel = model
+	deviceSerial = serial
+	// X-Hash: computed like GetHashVersion1(model, version[:56])
+	h := sha1.New()
+	h.Write([]byte(model + "ImageDescription: " + model + "; ImageDate: 20010101_000000; PORTAL version: 5.6.0; API Version: 0x1811"))
+	deviceHash = hex.EncodeToString(h.Sum(nil))
+}
+
+// SetUserAgent sets the User-Agent string used for HLS content requests.
+func SetUserAgent(model string) {
+	userAgent = "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) " + model + " stbapp ver: 4 rev: 2116 Mobile Safari/533.3"
+}
 
 func download(link string) (content []byte, contentType string, err error) {
 	resp, err := response(link)
@@ -21,14 +47,21 @@ func download(link string) (content []byte, contentType string, err error) {
 	return content, resp.Header.Get("Content-Type"), err
 }
 
-// This Golang's HTTP client will not follow redirects.
-//
-// This is because by default it adds "Referrer" to the header, which causes
-// 404 HTTP error in some backends. With below code such header is not added
-// and redirects should be performed manually.
+// httpClient fetches HLS segments and media content from the streaming server.
+// It disables redirects (the portal redirects to streaming servers; we follow
+// manually) and uses aggressive connection pooling with keep-alive to maintain
+// stream priority — matching the behavior of the STB's native hls::KeepAliveWatchDog.
 var httpClient = &http.Client{
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
+	},
+	Transport: &http.Transport{
+		MaxIdleConns:        12,
+		MaxIdleConnsPerHost: 6,
+		MaxConnsPerHost:     6, // Match Qt WebKit default — prevents account connection limit
+		IdleConnTimeout:     180 * time.Second,
+		// Keep default DisableCompression (false) — HLS needs to read
+		// M3U8 content as text for link rewriting.
 	},
 }
 
@@ -39,6 +72,12 @@ func response(link string) (*http.Response, error) {
 	}
 
 	req.Header.Set("User-Agent", userAgent)
+	if deviceMac != "" {
+		req.Header.Set("Mac", deviceMac)
+		req.Header.Set("Model", deviceModel)
+		req.Header.Set("X-Hash", deviceHash)
+		req.Header.Set("X-SerialNumber", deviceSerial)
+	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -71,22 +110,22 @@ func addHeaders(from, to http.Header, contentLength bool) {
 	for k, v := range from {
 		switch k {
 		case "Connection":
-			to.Set("Connection", strings.Join(v, "; "))
+			to[k] = v
 		case "Content-Type":
-			to.Set("Content-Type", strings.Join(v, "; "))
+			to[k] = v
 		case "Transfer-Encoding":
-			to.Set("Transfer-Encoding", strings.Join(v, "; "))
+			to[k] = v
 		case "Cache-Control":
-			to.Set("Cache-Control", strings.Join(v, "; "))
+			to[k] = v
 		case "Date":
-			to.Set("Date", strings.Join(v, "; "))
+			to[k] = v
 		case "Content-Length":
 			// This is only useful for unaltered media files. It should not be copied for HLS requests because
 			// players will not attempt to receive more bytes from HTTP server than are set here, therefore some HLS
 			// contents would not load. E.g. CURL would display error "curl: (18) transfer closed with 83 bytes remaining to read"
 			// if set for HLS metadata requests.
 			if contentLength {
-				to.Set("Content-Length", strings.Join(v, "; "))
+				to[k] = v
 			}
 		}
 	}

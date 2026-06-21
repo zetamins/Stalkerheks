@@ -1,6 +1,8 @@
 package stalker
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io/ioutil"
 	"log"
@@ -21,7 +23,6 @@ type Config struct {
 	Proxy struct {
 		Enabled bool   `yaml:"enabled"`
 		Bind    string `yaml:"bind"`
-		Rewrite bool   `yaml:"rewrite"`
 	} `yaml:"proxy"`
 }
 
@@ -33,14 +34,40 @@ type Portal struct {
 	DeviceID2    string `yaml:"device_id2"`
 	Signature    string `yaml:"signature"`
 	MAC          string `yaml:"mac"`
-	Username     string `yaml:"username"`
-	Password     string `yaml:"password"`
 	Location     string `yaml:"url"`
 	TimeZone     string `yaml:"time_zone"`
 	Token        string `yaml:"token"`
 }
 
-// ReadConfig returns configuration from the file in Portal object
+// deriveDeviceIDs auto-generates device_id2 and signature from device_id
+// using SHA-256, emulating the MAG GetUID() function. If values are already
+// provided in config, they are left unchanged.
+func (p *Portal) deriveDeviceIDs() {
+	h := sha256.New()
+	h.Write([]byte(p.DeviceID))
+
+	// device_id2 = SHA256(device_id + ":device_id:" + token)
+	if p.DeviceID2 == "" {
+		h2 := sha256.New()
+		h2.Write([]byte(p.DeviceID + ":device_id:" + p.Token))
+		p.DeviceID2 = hex.EncodeToString(h2.Sum(nil))
+		log.Println("Auto-generated device_id2 from device_id")
+	}
+
+	// signature = SHA256(device_id + ":signature")
+	if p.Signature == "" {
+		h3 := sha256.New()
+		h3.Write([]byte(p.DeviceID + ":signature"))
+		p.Signature = hex.EncodeToString(h3.Sum(nil))
+		log.Println("Auto-generated signature from device_id")
+	}
+
+	_ = h // keep import
+}
+
+// ReadConfig returns configuration from the file in Portal object.
+// If device_id2 and signature are empty, they are auto-generated from device_id
+// using SHA-256 — emulating the MAG GetUID() hardware key derivation.
 func ReadConfig(path *string) (*Config, error) {
 	content, err := ioutil.ReadFile(*path)
 	if err != nil {
@@ -56,6 +83,11 @@ func ReadConfig(path *string) (*Config, error) {
 	if err = c.validateWithDefaults(); err != nil {
 		return nil, err
 	}
+
+	// Auto-generate device_id2 and signature if only device_id is provided.
+	// This emulates GetUID() derivation from hardware-bound secret on real MAG boxes.
+	c.Portal.deriveDeviceIDs()
+
 	return c, nil
 }
 
@@ -87,8 +119,6 @@ func (c *Config) validateWithDefaults() error {
 		return errors.New("invalid MAC '" + c.Portal.MAC + "'")
 	}
 
-	/* Username and password fields are optional */
-
 	if c.Portal.Location == "" {
 		return errors.New("empty portal url")
 	}
@@ -109,8 +139,8 @@ func (c *Config) validateWithDefaults() error {
 		return errors.New("empty proxy bind")
 	}
 
-	if c.Proxy.Rewrite && !c.HLS.Enabled {
-		return errors.New("HLS service must be enabled for 'proxy: rewrite'")
+	if c.Proxy.Enabled && !c.HLS.Enabled {
+		return errors.New("HLS service must be enabled when proxy is enabled")
 	}
 
 	if c.Portal.Token == "" {
