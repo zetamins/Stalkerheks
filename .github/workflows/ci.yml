@@ -46,27 +46,27 @@ jobs:
           - {name: stalkerhek-linux-arm64, goos: linux, goarch: arm64}
           - {name: stalkerhek-linux-arm32, goos: linux, goarch: arm, goarm: "7"}
           - {name: stalkerhek-android-arm64, goos: android, goarch: arm64}
-          - {name: stalkerhek-android-arm32, goos: android, goarch: arm, goarm: "7", cgo: true}
+          - {name: stalkerhek-android-arm32, goos: android, goarch: arm, goarm: "7"}
           - {name: stalkerhek-android-x86_64, goos: android, goarch: amd64}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-      - if: matrix.cgo
+      - name: Setup NDK (for CGO ARM32 builds)
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
           unzip -q android-ndk-r26d-linux.zip
           echo "NDK=$PWD/android-ndk-r26d" >> $GITHUB_ENV
-      - run: |
-          if [ -n "$NDK" ]; then
+      - name: Build
+        run: |
+          if echo "${{ matrix.name }}" | grep -q arm32; then
             export CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang"
+            CGO_ENABLED=1
+          else
+            CGO_ENABLED=0
           fi
-          CGO_ENABLED=${{ matrix.cgo && '1' || '0' }} \
-          GOOS=${{ matrix.goos }} \
-          GOARCH=${{ matrix.goarch }} \
-          GOARM=${{ matrix.goarm }} \
-          go build -o ${{ matrix.name }} ./cmd/stalkerhek/
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} go build -o ${{ matrix.name }} ./cmd/stalkerhek/
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
