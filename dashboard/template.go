@@ -12,7 +12,7 @@ const dashboardHTML = `<!doctype html>
 *{box-sizing:border-box}
 body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Helvetica,Arial,sans-serif;background:linear-gradient(180deg,#0d1410 0%,#0a0f0a 100%);color:var(--text);min-height:100dvh}
 a{color:var(--brand);text-decoration:none}a:hover{color:var(--brand-hover);text-decoration:underline}
-.wrap{max-width:1200px;margin:0 auto;padding:28px 20px 130px;min-height:100dvh;display:flex;flex-direction:column;gap:18px}
+.wrap{max-width:1200px;margin:0 auto;padding-top:calc(clamp(22px,4vw,32px) + env(safe-area-inset-top));padding-left:calc(clamp(16px,3vw,28px) + env(safe-area-inset-left));padding-right:calc(clamp(16px,3vw,28px) + env(safe-area-inset-right));padding-bottom:calc(100px + env(safe-area-inset-bottom));min-height:100dvh;display:flex;flex-direction:column;gap:16px}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 20px;background:var(--panel);border:1px solid var(--border);border-radius:14px}
 .topbar-left{display:flex;align-items:center;gap:14px}
 .topbar .logo{font-size:20px;font-weight:700;letter-spacing:-.3px;display:flex;align-items:center;gap:10px}

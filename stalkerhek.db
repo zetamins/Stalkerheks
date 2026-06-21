@@ -8,7 +8,7 @@
       "device_id2": "5E25CD4FD75CEB1C3DBB041B962FC512D359F3D75D377DA75926A279DFDD8419",
       "signature": "EE2532B623C1103B60AA7DCEE813FE14871C56CDC69818B50ADB43367783F1E0",
       "mac": "A0:BB:3E:02:3C:B6",
-      "url": "http://tres.4vps.info:80/c/",
+      "url": "http://tres.4vps.info:80/c/portal.php",
       "time_zone": "Europe/Vilnius",
       "token": ""
     },
