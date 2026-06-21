@@ -1,9 +1,8 @@
 #!/bin/bash
-# Minimal gradle wrapper - falls back to system gradle
-if command -v gradle &>/dev/null; then
-  exec gradle "$@"
-else
-  echo "Gradle not found. Install Android Studio or run: sdkmanager 'build-tools;34.0.0'"
-  echo "The Go binaries are available as separate release assets."
-  exit 1
+# Auto-download gradle if not present
+if [ ! -f "$PWD/gradle/wrapper/gradle-wrapper.jar" ]; then
+  echo "Downloading gradle wrapper..."
+  mkdir -p "$PWD/gradle/wrapper"
+  wget -q https://raw.githubusercontent.com/gradle/gradle/v8.5.0/gradle/wrapper/gradle-wrapper.jar -O "$PWD/gradle/wrapper/gradle-wrapper.jar"
 fi
+java -cp "$PWD/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain "$@"
