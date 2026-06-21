@@ -17,7 +17,8 @@ jobs:
       tag: ${{ steps.bump.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-        with: {fetch-depth: 0}
+        with:
+          fetch-depth: 0
       - id: latest
         run: echo "tag=$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)" >> $GITHUB_OUTPUT
       - id: bump
@@ -50,17 +51,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: '1.22'}
+        with:
+          go-version: '1.22'
       - if: matrix.cgo
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
           unzip -q android-ndk-r26d-linux.zip
           echo "NDK=$PWD/android-ndk-r26d" >> $GITHUB_ENV
       - run: |
-          [ -n "$NDK" ] && export CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang"
-          CGO_ENABLED=${{ matrix.cgo && '1' || '0' }} GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} go build -o ${{ matrix.name }} ./cmd/stalkerhek/
+          if [ -n "$NDK" ]; then
+            export CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi21-clang"
+          fi
+          CGO_ENABLED=${{ matrix.cgo && '1' || '0' }} \
+          GOOS=${{ matrix.goos }} \
+          GOARCH=${{ matrix.goarch }} \
+          GOARM=${{ matrix.goarm }} \
+          go build -o ${{ matrix.name }} ./cmd/stalkerhek/
       - uses: actions/upload-artifact@v4
-        with: {name: ${{ matrix.name }}, path: ${{ matrix.name }}}
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
 
   apk:
     name: Build APK
@@ -69,32 +79,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
-        with: {java-version: '17', distribution: 'temurin'}
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - uses: android-actions/setup-android@v3
         with:
           packages: 'platforms;android-35 build-tools;35.0.0'
-
-      - name: Download Android binaries
-        uses: actions/download-artifact@v4
-        with: {path: android/app/src/main/assets}
-
+      - uses: actions/download-artifact@v4
+        with:
+          path: android/app/src/main/assets
       - name: Organize binaries
         run: |
           mv android/app/src/main/assets/stalkerhek-android-arm64/* android/app/src/main/assets/stalkerhek-arm64
           mv android/app/src/main/assets/stalkerhek-android-arm32/* android/app/src/main/assets/stalkerhek-arm
           mv android/app/src/main/assets/stalkerhek-android-x86_64/* android/app/src/main/assets/stalkerhek-x86_64
           ls -la android/app/src/main/assets/
-
       - name: Build APK
         working-directory: android
-        run: |
-          ./gradlew assembleRelease
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with: {name: stalkerhek-apk, path: android/app/build/outputs/apk/release/*.apk}
+        run: ./gradlew assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stalkerhek-apk
+          path: android/app/build/outputs/apk/release/*.apk
 
   release:
     name: GitHub Release
@@ -102,7 +108,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
-        with: {path: release}
+        with:
+          path: release
       - run: |
           mkdir -p flat
           find release -type f \( -executable -o -name '*.apk' \) -exec cp {} flat/ \;
