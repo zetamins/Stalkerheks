@@ -68,9 +68,10 @@ a{color:var(--brand);text-decoration:none}a:hover{color:var(--brand-hover);text-
       <div class="logo"><div class="dot"></div>Stalkerhek</div>
     </div>
     <div class="tabs">
-      <button class="tab active" onclick="showTab('profiles')"><i class="fa-solid fa-server"></i>Profiles</button>
+      <button class="tab active" onclick="showTab('connect')"><i class="fa-solid fa-qrcode"></i>Connect</button>
+      <button class="tab" onclick="showTab('profiles')"><i class="fa-solid fa-server"></i>Profiles</button>
       <button class="tab" onclick="showTab('logs')"><i class="fa-solid fa-file-lines"></i>Logs</button>
-      <button class="tab" onclick="addProfile()"><i class="fa-solid fa-plus"></i>New Profile</button>
+      <button class="tab" onclick="addProfile()"><i class="fa-solid fa-plus"></i>New</button>
     </div>
   </div>
   <div id="content" class="grid"></div>
@@ -78,8 +79,34 @@ a{color:var(--brand);text-decoration:none}a:hover{color:var(--brand-hover);text-
 <div id="modal-container"></div>
 <div id="toast-container"></div>
 <script>
-const API='/api/profiles';let currentTab='profiles';
-function showTab(tab){currentTab=tab;document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));event.target.classList.add('active');if(tab==='profiles')loadProfiles();else showLogSelector()}
+const API='/api/profiles';let currentTab='connect';
+function showTab(tab){currentTab=tab;document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));event.target.classList.add('active');if(tab==='connect')showConnect();else if(tab==='profiles')loadProfiles();else showLogSelector()}
+async function showConnect(){
+  const res=await fetch(API);const profiles=await res.json();
+  const active=profiles.find(p=>p.status==='running')||profiles[0];
+  const host=location.hostname;
+  const proxyPort=active?.services?.proxy_bind?.split(':')[1]||'8888';
+  const hlsPort=active?.services?.hls_bind?.split(':')[1]||'9999';
+  const dashPort=location.port||'8080';
+  const proxyURL='http://'+host+':'+proxyPort+'/c/';
+  const hlsURL='http://'+host+':'+hlsPort+'/iptv/';
+  const dashURL='http://'+host+':'+dashPort+'/';
+  const qrURL='https://api.qrserver.com/v1/create-qr-code/?size=200x200&data='+encodeURIComponent(dashURL);
+  document.getElementById('content').className='';
+  document.getElementById('content').innerHTML=
+    '<div class="card" style="text-align:center;grid-column:1/-1;padding:32px 20px">'+
+    '<div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:6px"><div class="dot-indicator dot-green" style="width:10px;height:10px"></div><span style="font-size:16px;font-weight:700">'+(active?'Active: '+esc(active.name):'No profiles')+'</span></div>'+
+    '<p style="color:var(--muted);font-size:13px;margin-bottom:20px">Scan QR to open dashboard on your phone</p>'+
+    '<img src="'+qrURL+'" alt="QR Code" style="border-radius:12px;background:#fff;padding:8px;width:200px;height:200px" onerror="this.src=\'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect width=%22200%22 height=%22200%22 fill=%22%23fff%22/><text x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 font-size=%2214%22 fill=%22%23000%22>QR unavailable</text></svg>\'">'+
+    '<div style="margin-top:24px;display:grid;gap:8px;max-width:500px;margin-left:auto;margin-right:auto">'+
+    '<div class="card-info" style="justify-content:center;padding:10px;background:var(--panel2);border-radius:8px"><i class="fa-solid fa-tv"></i><span>STB Portal: <code style="color:var(--brand)">'+esc(proxyURL)+'</code></span></div>'+
+    '<div class="card-info" style="justify-content:center;padding:10px;background:var(--panel2);border-radius:8px"><i class="fa-solid fa-play"></i><span>HLS Streams: <code style="color:var(--brand)">'+esc(hlsURL)+'&lt;channel&gt;</code></span></div>'+
+    '<div class="card-info" style="justify-content:center;padding:10px;background:var(--panel2);border-radius:8px"><i class="fa-solid fa-gauge"></i><span>Dashboard: <code style="color:var(--brand)">'+esc(dashURL)+'</code></span></div>'+
+    '</div>'+
+    (active?'<div style="margin-top:16px;font-size:12px;color:var(--muted)">Model: '+esc(active.portal?.model||'—')+' | MAC: '+esc(active.portal?.mac||'—')+'</div>':'')+
+    '</div>';
+}
+showConnect();
 async function loadProfiles(){
   const res=await fetch(API);const profiles=await res.json();
   const grid=document.getElementById('content');
