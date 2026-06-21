@@ -16,3 +16,9 @@ hls:
 proxy:
   enabled: false
   bind: 0.0.0.0:8888
+
+dashboard:
+  enabled: false
+  bind: 0.0.0.0:8080
+  binary: ./stalkerhek
+  profiles_dir: ./profiles

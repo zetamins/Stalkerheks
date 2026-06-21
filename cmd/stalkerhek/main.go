@@ -5,6 +5,7 @@ import (
 	"log"
 	"sync"
 
+	"github.com/erkexzcx/stalkerhek/dashboard"
 	"github.com/erkexzcx/stalkerhek/hls"
 	"github.com/erkexzcx/stalkerhek/proxy"
 	"github.com/erkexzcx/stalkerhek/stalker"
@@ -58,6 +59,21 @@ func main() {
 		go func() {
 			log.Println("Starting proxy service...")
 			proxy.Start(c, channels)
+			wg.Done()
+		}()
+	}
+
+	if c.Dashboard.Enabled {
+		wg.Add(1)
+		go func() {
+			log.Println("Starting dashboard...")
+			if c.Dashboard.BinaryPath == "" {
+				c.Dashboard.BinaryPath = "./stalkerhek"
+			}
+			if c.Dashboard.ProfilesDir == "" {
+				c.Dashboard.ProfilesDir = "./profiles"
+			}
+			dashboard.Start(c.Dashboard.ProfilesDir, c.Dashboard.Bind)
 			wg.Done()
 		}()
 	}

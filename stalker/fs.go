@@ -24,6 +24,12 @@ type Config struct {
 		Enabled bool   `yaml:"enabled"`
 		Bind    string `yaml:"bind"`
 	} `yaml:"proxy"`
+	Dashboard struct {
+		Enabled    bool   `yaml:"enabled"`
+		Bind       string `yaml:"bind"`
+		BinaryPath string `yaml:"binary"`
+		ProfilesDir string `yaml:"profiles_dir"`
+	} `yaml:"dashboard"`
 }
 
 // Portal represents Stalker portal
