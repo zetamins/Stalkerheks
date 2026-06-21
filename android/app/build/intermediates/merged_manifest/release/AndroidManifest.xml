@@ -15,6 +15,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <permission
         android:name="com.stalkerhek.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
@@ -43,6 +46,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Foreground service keeps server alive when app is closed -->
+        <service
+            android:name="com.stalkerhek.app.ServerService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse" />
 
         <!-- Auto-start server on device boot -->
         <receiver

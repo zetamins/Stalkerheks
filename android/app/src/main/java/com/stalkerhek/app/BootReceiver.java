@@ -17,7 +17,7 @@ public class BootReceiver extends BroadcastReceiver {
             String dbDir = context.getFilesDir().getAbsolutePath();
             new Thread(() -> {
                 try {
-                    String binPath = dbDir + "/stalkerhek";
+                    String binPath = context.getApplicationInfo().nativeLibraryDir + "/libstalkerhek.so";
                     String assetName = detectArch();
                     // Extract binary
                     java.io.InputStream in = context.getAssets().open(assetName);

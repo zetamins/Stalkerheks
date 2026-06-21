@@ -8,6 +8,7 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -17,6 +18,7 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -40,6 +42,8 @@ public class MainActivity extends Activity {
     private String dashPort = "8080";
     private String host = "127.0.0.1";
 
+    private boolean serverReady = false;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -49,6 +53,63 @@ public class MainActivity extends Activity {
             return;
         }
 
+        // Show loading screen while server starts
+        showLoadingScreen();
+
+        // Start server as foreground service
+        Intent si = new Intent(this, ServerService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(si);
+        } else {
+            startService(si);
+        }
+
+        // Poll until server is ready, then show main UI
+        pollServer();
+    }
+
+    private void showLoadingScreen() {
+        LinearLayout loading = new LinearLayout(this);
+        loading.setOrientation(LinearLayout.VERTICAL);
+        loading.setGravity(Gravity.CENTER);
+        loading.setBackgroundColor(Color.parseColor("#0a0f0a"));
+
+        ProgressBar spinner = new ProgressBar(this);
+        spinner.getIndeterminateDrawable().setTint(Color.parseColor("#2d7a4e"));
+        loading.addView(spinner);
+
+        TextView txt = new TextView(this);
+        txt.setText("Starting Stalkerhek...");
+        txt.setTextColor(Color.parseColor("#9aaa9a"));
+        txt.setTextSize(16);
+        txt.setPadding(0, 20, 0, 0);
+        loading.addView(txt);
+
+        setContentView(loading);
+    }
+
+    private void pollServer() {
+        if (serverReady) return;
+        new Thread(() -> {
+            try {
+                java.net.URL url = new java.net.URL("http://127.0.0.1:8080/");
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(1500);
+                int code = conn.getResponseCode();
+                conn.disconnect();
+                if (code == 200) {
+                    handler.post(() -> {
+                        serverReady = true;
+                        buildUI();
+                    });
+                    return;
+                }
+            } catch (Exception e) {}
+            handler.postDelayed(this::pollServer, 1500);
+        }).start();
+    }
+
+    private void buildUI() {
         // Detect WiFi IP for LAN access
         try {
             for (NetworkInterface iface : java.util.Collections.list(NetworkInterface.getNetworkInterfaces())) {
@@ -141,12 +202,17 @@ public class MainActivity extends Activity {
         restartBtn.setBackgroundColor(Color.parseColor("#2d7a4e"));
         restartBtn.setPadding(24, 14, 24, 14);
         restartBtn.setOnClickListener(v -> {
-            Intent intent = getBaseContext().getPackageManager()
-                .getLaunchIntentForPackage(getBaseContext().getPackageName());
-            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(intent);
-            android.os.Process.killProcess(android.os.Process.myPid());
-            System.exit(0);
+            // Stop and restart the foreground service
+            Intent si = new Intent(this, ServerService.class);
+            stopService(si);
+            handler.postDelayed(() -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(new Intent(this, ServerService.class));
+                } else {
+                    startService(new Intent(this, ServerService.class));
+                }
+                Toast.makeText(this, "Server restarted", Toast.LENGTH_SHORT).show();
+            }, 1000);
         });
         root.addView(restartBtn);
 
@@ -157,8 +223,9 @@ public class MainActivity extends Activity {
         killBtn.setBackgroundColor(Color.parseColor("#e85d4d"));
         killBtn.setPadding(24, 12, 24, 12);
         killBtn.setOnClickListener(v -> {
-            android.os.Process.killProcess(android.os.Process.myPid());
-            System.exit(0);
+            stopService(new Intent(this, ServerService.class));
+            Toast.makeText(this, "Server stopped", Toast.LENGTH_SHORT).show();
+            finish();
         });
         root.addView(killBtn);
 
@@ -167,9 +234,6 @@ public class MainActivity extends Activity {
         scroll.addView(root);
         scroll.setBackgroundColor(Color.parseColor("#0a0f0a"));
         setContentView(scroll);
-
-        // Start server
-        startServer();
     }
 
     private LinearLayout urlCard(String label, String url, boolean copyable) {
@@ -197,7 +261,6 @@ public class MainActivity extends Activity {
         val.setText(url);
         val.setTextColor(Color.parseColor("#3fb970"));
         val.setTextSize(13);
-        val.setAutoLinkMask(0);
         val.setMovementMethod(LinkMovementMethod.getInstance());
         textCol.addView(val);
 
@@ -233,31 +296,12 @@ public class MainActivity extends Activity {
         return bitmap;
     }
 
-    private void startServer() {
-        final String dbDir = getFilesDir().getAbsolutePath();
-        final String binPath = dbDir + "/stalkerhek";
-        final String assetName;
-        String abi = android.os.Build.SUPPORTED_ABIS[0];
-        if (abi.contains("x86_64")) assetName = "stalkerhek-x86_64";
-        else if (abi.contains("x86")) assetName = "stalkerhek-x86";
-        else if (abi.contains("arm64")) assetName = "stalkerhek-arm64";
-        else assetName = "stalkerhek-arm32";
-
-        new Thread(() -> {
-            try {
-                java.io.InputStream in = getAssets().open(assetName);
-                java.io.FileOutputStream out = new java.io.FileOutputStream(binPath);
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = in.read(buf)) > -1) out.write(buf, 0, n);
-                in.close(); out.close();
-                new java.io.File(binPath).setExecutable(true);
-                Runtime.getRuntime().exec(new String[]{binPath, "-profile", "default", "-db", dbDir});
-                handler.post(() -> Toast.makeText(this, "Server started", Toast.LENGTH_SHORT).show());
-            } catch (Exception e) {
-                handler.post(() -> Toast.makeText(this, "Server start failed: " + e.getMessage(), Toast.LENGTH_LONG).show());
-            }
-        }).start();
+    public static String detectArch() {
+        String abi = Build.SUPPORTED_ABIS[0];
+        if (abi.contains("x86_64")) return "stalkerhek-x86_64";
+        else if (abi.contains("x86")) return "stalkerhek-x86";
+        else if (abi.contains("arm64")) return "stalkerhek-arm64";
+        else return "stalkerhek-arm32";
     }
 
     private void showPrivacyDialog() {
