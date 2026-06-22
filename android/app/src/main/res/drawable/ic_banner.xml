@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android TV banner icon -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path
+        android:fillColor="#080C09"
+        android:pathData="M0,0h320v180H0z" />
+    <path
+        android:fillColor="#2D8A4E"
+        android:pathData="M30,30L30,90c0,20 12.5,38.7 30,50c17.5,-11.3 30,-30 30,-50V30L60,18L30,30z" />
+    <path
+        android:fillColor="#080C09"
+        android:pathData="M46,48v34l24,-17z" />
+</vector>

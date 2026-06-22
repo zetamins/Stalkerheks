@@ -1,49 +1,23 @@
-name: Manual Release (override)
+name: Manual Release
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g. 1.0.0)'
+        description: 'Release version (e.g. 1.16.0)'
         required: true
 
 env:
   NDK_VERSION: r28
-  NDK_API: 21
+  NDK_API: 26
 
 jobs:
-  build-android:
-    name: Build Android Binaries
+  build-jni:
+    name: JNI .so (arm64-v8a)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - arch: arm64
-            goarch: arm64
-            goarm: ""
-            name: stalkerhek-android-arm64
-            cc: aarch64-linux-android
-          - arch: arm
-            goarch: arm
-            goarm: "7"
-            name: stalkerhek-android-arm32
-            cc: armv7a-linux-androideabi
-          - arch: x86
-            goarch: "386"
-            goarm: ""
-            name: stalkerhek-android-x86
-            cc: i686-linux-android
-          - arch: x86_64
-            goarch: amd64
-            goarm: ""
-            name: stalkerhek-android-x86_64
-            cc: x86_64-linux-android
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
 
@@ -53,75 +27,179 @@ jobs:
           unzip -q android-ndk-${NDK_VERSION}-linux.zip
           echo "NDK_HOME=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
 
-      - name: Build (with CGO + NDK)
+      - name: Build libstalkerhek_engine.so (c-shared)
         run: |
-          export CC="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.cc }}${NDK_API}-clang"
-          CGO_ENABLED=1 GOOS=android GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} \
-            go build -o ${{ matrix.name }} ./cmd/stalkerhek/
-          file ${{ matrix.name }}
+          export CC="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${NDK_API}-clang"
+          export CGO_ENABLED=1
+          GOOS=android GOARCH=arm64 \
+            go build -buildmode=c-shared -o libstalkerhek_engine.so ./cmd/stalkerhek/
+          file libstalkerhek_engine.so
 
-      - name: Upload binary
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}
-          path: ${{ matrix.name }}
+          name: jni-arm64
+          path: libstalkerhek_engine.so
 
-  build-linux:
-    name: Build Linux Binaries
+  build-exec:
+    name: Exec fallback (${{ matrix.abi }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
-          - goarch: amd64
-            name: stalkerhek-linux-amd64
-          - goarch: arm64
-            name: stalkerhek-linux-arm64
-          - goarch: arm
-            goarm: "7"
-            name: stalkerhek-linux-arm32
+          - {abi: armeabi-v7a, goarch: arm, goarm: "7", cc: armv7a-linux-androideabi}
+          - {abi: x86, goarch: "386", goarm: "", cc: i686-linux-android}
+          - {abi: x86_64, goarch: amd64, goarm: "", cc: x86_64-linux-android}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
 
+      - name: Install Android NDK
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
+          unzip -q android-ndk-${NDK_VERSION}-linux.zip
+          echo "NDK_HOME=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+
+      - name: Build libstalkerhek.so
+        run: |
+          export CC="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.cc }}${NDK_API}-clang"
+          export CGO_ENABLED=1
+          GOOS=android GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} \
+            go build -o libstalkerhek.so ./cmd/stalkerhek/
+          file libstalkerhek.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exec-${{ matrix.abi }}
+          path: libstalkerhek.so
+
+  build-linux:
+    name: Linux (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - {name: stalkerhek-linux-amd64, goarch: amd64}
+          - {name: stalkerhek-linux-arm64, goarch: arm64}
+          - {name: stalkerhek-linux-arm32, goarch: arm, goarm: "7"}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
       - name: Build
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} \
             go build -o ${{ matrix.name }} ./cmd/stalkerhek/
           file ${{ matrix.name }}
-
-      - name: Upload binary
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
           path: ${{ matrix.name }}
 
-  release:
-    name: Create Release
-    needs: [build-android, build-linux]
+  apk:
+    name: Build & Sign APK
+    needs: [build-jni, build-exec]
     runs-on: ubuntu-latest
     steps:
-      - name: Download all binaries
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'build-tools;35.0.0 platforms;android-35'
+
+      - name: Download JNI .so
         uses: actions/download-artifact@v4
         with:
-          path: binaries
+          name: jni-arm64
+          path: android/app/src/main/jniLibs/arm64-v8a
 
-      - name: Flatten directory
-        run: |
-          mkdir -p release
-          find binaries -type f -executable -exec cp {} release/ \;
-          ls -la release/
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - name: Download exec fallbacks
+        uses: actions/download-artifact@v4
         with:
-          name: Stalkerhek ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
-          files: release/*
+          pattern: exec-*
+          path: android/app/src/main/jniLibs
+          merge-multiple: true
+
+      - name: Rename exec fallbacks into ABI dirs
+        run: |
+          mkdir -p android/app/src/main/jniLibs/{armeabi-v7a,x86,x86_64}
+          if [ -f android/app/src/main/jniLibs/exec-armeabi-v7a/libstalkerhek.so ]; then
+            mv android/app/src/main/jniLibs/exec-armeabi-v7a/libstalkerhek.so android/app/src/main/jniLibs/armeabi-v7a/
+          fi
+          if [ -f android/app/src/main/jniLibs/exec-x86/libstalkerhek.so ]; then
+            mv android/app/src/main/jniLibs/exec-x86/libstalkerhek.so android/app/src/main/jniLibs/x86/
+          fi
+          if [ -f android/app/src/main/jniLibs/exec-x86_64/libstalkerhek.so ]; then
+            mv android/app/src/main/jniLibs/exec-x86_64/libstalkerhek.so android/app/src/main/jniLibs/x86_64/
+          fi
+          rm -rf android/app/src/main/jniLibs/exec-*
+          echo "=== jniLibs ==="
+          find android/app/src/main/jniLibs -type f -exec ls -lh {} \;
+
+      - name: Generate CI keystore
+        run: |
+          keytool -genkeypair -v \
+            -keystore android/release.keystore \
+            -alias stalkerhek \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass stalkerhek -keypass stalkerhek \
+            -dname "CN=Stalkerhek CI, OU=Dev, O=Stalkerhek, L=N/A, ST=N/A, C=US"
+
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew assembleRelease
+
+      - name: Sign APK
+        run: |
+          APK_IN="android/app/build/outputs/apk/release/app-release.apk"
+          APK_OUT="android/app/build/outputs/apk/release/stalkerhek-${{ inputs.version }}.apk"
+
+          $ANDROID_HOME/build-tools/35.0.0/apksigner sign \
+            --ks android/release.keystore \
+            --ks-pass pass:stalkerhek \
+            --ks-key-alias stalkerhek \
+            --key-pass pass:stalkerhek \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --out "$APK_OUT" \
+            "$APK_IN"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stalkerhek-apk
+          path: android/app/build/outputs/apk/release/stalkerhek-*.apk
+
+  release:
+    name: Create GitHub Release
+    needs: [build-linux, apk]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*'
+          path: release
+
+      - name: Flatten release artifacts
+        run: |
+          mkdir -p flat
+          find release -type f -name '*.apk' -exec cp {} flat/ \;
+          find release -type f -name 'stalkerhek-linux-*' -exec cp {} flat/ \;
+          echo "=== Release artifacts ==="
+          ls -lh flat/
+
+      - uses: softprops/action-gh-release@v1
+        with:
+          name: Stalkerhek ${{ inputs.version }}
+          tag_name: v${{ inputs.version }}
+          files: flat/*
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

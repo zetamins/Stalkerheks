@@ -1,24 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Minimal permissions: networking + boot start. No SMS, no accessibility.
-         This app runs a local IPTV proxy server for your own set-top box. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <application
-        android:allowBackup="true"
+        android:name=".StalkerApplication"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:banner="@drawable/ic_banner"
         android:label="Stalkerhek"
         android:supportsRtl="true"
         android:theme="@style/Theme.Stalkerhek"
         android:usesCleartextTraffic="true">
 
-        <!-- Privacy disclosure shown before app starts -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -29,13 +32,11 @@
             </intent-filter>
         </activity>
 
-        <!-- Foreground service keeps server alive when app is closed -->
         <service
-            android:name=".ServerService"
-            android:foregroundServiceType="specialUse"
-            android:exported="false" />
+            android:name=".EngineService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse" />
 
-        <!-- Auto-start server on device boot -->
         <receiver
             android:name=".BootReceiver"
             android:exported="true">
@@ -43,5 +44,6 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
     </application>
 </manifest>

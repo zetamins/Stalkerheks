@@ -137,6 +137,9 @@ func (s *Store) Save(p Profile) error {
 	if p.Services.HLSBind == "" {
 		p.Services.HLSBind = "0.0.0.0:9999"
 	}
+	if p.Dashboard.Bind == "" {
+		p.Dashboard.Bind = "0.0.0.0:8080"
+	}
 
 	// Auto-generate token if empty (must be before device ID derivation)
 	if p.Portal.Token == "" {

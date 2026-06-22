@@ -1,4 +1,4 @@
-name: CI — Auto Version & Build
+name: CI — Build & APK
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
 
 env:
   NDK_VERSION: r28
-  NDK_API: 21
+  NDK_API: 26
 
 jobs:
   version:
@@ -39,22 +39,10 @@ jobs:
           git tag ${{ steps.bump.outputs.tag }}
           git push origin ${{ steps.bump.outputs.tag }}
 
-  build:
-    name: Build ${{ matrix.name }}
-    needs: version
+  build-jni:
+    name: Build JNI .so (arm64)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          # Linux — no cgo needed
-          - {name: stalkerhek-linux-amd64, goos: linux, goarch: amd64}
-          - {name: stalkerhek-linux-arm64, goos: linux, goarch: arm64}
-          - {name: stalkerhek-linux-arm32, goos: linux, goarch: arm, goarm: "7"}
-          # Android — all 4 ABIs, built with cgo + NDK clang
-          - {name: stalkerhek-android-arm64, goos: android, goarch: arm64, cc: aarch64-linux-android}
-          - {name: stalkerhek-android-arm32, goos: android, goarch: arm, goarm: "7", cc: armv7a-linux-androideabi}
-          - {name: stalkerhek-android-x86, goos: android, goarch: "386", cc: i686-linux-android}
-          - {name: stalkerhek-android-x86_64, goos: android, goarch: amd64, cc: x86_64-linux-android}
+    needs: version
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -62,78 +50,157 @@ jobs:
           go-version: '1.22'
 
       - name: Install Android NDK
-        if: matrix.goos == 'android'
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
           unzip -q android-ndk-${NDK_VERSION}-linux.zip
           echo "NDK_HOME=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
 
-      - name: Build
+      - name: Build libstalkerhek_engine.so (c-shared)
         run: |
-          if [ "${{ matrix.goos }}" = "android" ]; then
-            export CC="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.cc }}${NDK_API}-clang"
-            export CGO_ENABLED=1
-          else
-            export CGO_ENABLED=0
-          fi
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} \
-            go build -o ${{ matrix.name }} ./cmd/stalkerhek/
-          file ${{ matrix.name }}
+          export CC="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${NDK_API}-clang"
+          export CGO_ENABLED=1
+          GOOS=android GOARCH=arm64 \
+            go build -buildmode=c-shared -o libstalkerhek_engine.so ./cmd/stalkerhek/
+          file libstalkerhek_engine.so
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}
-          path: ${{ matrix.name }}
+          name: jni-arm64
+          path: libstalkerhek_engine.so
+
+  build-exec:
+    name: Build exec fallback (${{ matrix.abi }})
+    runs-on: ubuntu-latest
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - {abi: armeabi-v7a, goarch: arm, goarm: "7", cc: armv7a-linux-androideabi}
+          - {abi: x86, goarch: "386", goarm: "", cc: i686-linux-android}
+          - {abi: x86_64, goarch: amd64, goarm: "", cc: x86_64-linux-android}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install Android NDK
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
+          unzip -q android-ndk-${NDK_VERSION}-linux.zip
+          echo "NDK_HOME=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+
+      - name: Build libstalkerhek.so (exec fallback)
+        run: |
+          export CC="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.cc }}${NDK_API}-clang"
+          export CGO_ENABLED=1
+          GOOS=android GOARCH=${{ matrix.goarch }} GOARM=${{ matrix.goarm }} \
+            go build -o libstalkerhek.so ./cmd/stalkerhek/
+          file libstalkerhek.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exec-${{ matrix.abi }}
+          path: libstalkerhek.so
 
   apk:
-    name: Build APK
-    needs: [version, build]
+    name: Build & Sign APK
+    needs: [version, build-jni, build-exec]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-      - uses: android-actions/setup-android@v3
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
         with:
-          packages: 'platforms;android-35 build-tools;35.0.0'
-      - uses: actions/download-artifact@v4
+          packages: 'build-tools;35.0.0 platforms;android-35'
+
+      - name: Download JNI .so (arm64)
+        uses: actions/download-artifact@v4
         with:
-          path: android/app/src/main/assets
-      - name: Organize binaries
+          name: jni-arm64
+          path: android/app/src/main/jniLibs/arm64-v8a
+
+      - name: Download exec fallback (armeabi-v7a)
+        uses: actions/download-artifact@v4
+        with:
+          name: exec-armeabi-v7a
+          path: android/app/src/main/jniLibs/armeabi-v7a
+
+      - name: Download exec fallback (x86)
+        uses: actions/download-artifact@v4
+        with:
+          name: exec-x86
+          path: android/app/src/main/jniLibs/x86
+
+      - name: Download exec fallback (x86_64)
+        uses: actions/download-artifact@v4
+        with:
+          name: exec-x86_64
+          path: android/app/src/main/jniLibs/x86_64
+
+      - name: Verify jniLibs
         run: |
-          mv android/app/src/main/assets/stalkerhek-android-arm64/* android/app/src/main/assets/stalkerhek-arm64
-          mv android/app/src/main/assets/stalkerhek-android-arm32/* android/app/src/main/assets/stalkerhek-arm32
-          mv android/app/src/main/assets/stalkerhek-android-x86/* android/app/src/main/assets/stalkerhek-x86
-          mv android/app/src/main/assets/stalkerhek-android-x86_64/* android/app/src/main/assets/stalkerhek-x86_64
-          ls -la android/app/src/main/assets/
+          echo "=== jniLibs structure ==="
+          find android/app/src/main/jniLibs -type f -exec ls -lh {} \;
+
+      - name: Generate CI keystore
+        run: |
+          keytool -genkeypair -v \
+            -keystore android/release.keystore \
+            -alias stalkerhek \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass stalkerhek -keypass stalkerhek \
+            -dname "CN=Stalkerhek CI, OU=Dev, O=Stalkerhek, L=N/A, ST=N/A, C=US"
+
       - name: Build APK
         working-directory: android
         run: ./gradlew assembleRelease
+
+      - name: Sign APK (v1+v2+v3)
+        run: |
+          APK_IN="android/app/build/outputs/apk/release/app-release.apk"
+          APK_OUT="android/app/build/outputs/apk/release/stalkerhek-${{ needs.version.outputs.tag }}.apk"
+
+          $ANDROID_HOME/build-tools/35.0.0/apksigner sign \
+            --ks android/release.keystore \
+            --ks-pass pass:stalkerhek \
+            --ks-key-alias stalkerhek \
+            --key-pass pass:stalkerhek \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --out "$APK_OUT" \
+            "$APK_IN"
+
       - uses: actions/upload-artifact@v4
         with:
           name: stalkerhek-apk
-          path: android/app/build/outputs/apk/release/*.apk
+          path: android/app/build/outputs/apk/release/stalkerhek-*.apk
 
   release:
     name: GitHub Release
-    needs: [version, build, apk]
+    needs: [version, apk]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
+          name: stalkerhek-apk
           path: release
-      - run: |
-          mkdir -p flat
-          find release -type f -not -name '*.apk' -exec cp {} flat/ \;
-          find release -name '*.apk' -exec cp {} flat/ \; 2>/dev/null || true
-          ls -la flat/
+
+      - name: List release artifacts
+        run: ls -lh release/
+
       - uses: softprops/action-gh-release@v1
         with:
           name: ${{ needs.version.outputs.version }}
           tag_name: ${{ needs.version.outputs.tag }}
-          files: flat/*
+          files: release/*
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

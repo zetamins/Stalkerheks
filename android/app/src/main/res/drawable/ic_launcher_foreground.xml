@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Dark circle background -->
+    <path
+        android:fillColor="#080C09"
+        android:pathData="M54,10C29.7,10 10,29.7 10,54s19.7,44 44,44s44,-19.7 44,-44S78.3,10 54,10z" />
+    <!-- Green ring -->
+    <path
+        android:fillColor="#2D8A4E"
+        android:pathData="M54,20C35.2,20 20,35.2 20,54s15.2,34 34,34s34,-15.2 34,-34S72.8,20 54,20z" />
+    <!-- Dark inner circle -->
+    <path
+        android:fillColor="#080C09"
+        android:pathData="M54,26C38.5,26 26,38.5 26,54s12.5,28 28,28s28,-12.5 28,-28S69.5,26 54,26z" />
+    <!-- Green play triangle -->
+    <path
+        android:fillColor="#2D8A4E"
+        android:pathData="M48,38v32l24,-16z" />
+</vector>

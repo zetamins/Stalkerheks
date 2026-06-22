@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Legacy icon for pre-API 26: green play triangle on dark circle -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="96"
+    android:viewportHeight="96">
+    <path
+        android:fillColor="#080C09"
+        android:pathData="M48,2C22.6,2 2,22.6 2,48s20.6,46 46,46s46,-20.6 46,-46S73.4,2 48,2z" />
+    <path
+        android:fillColor="#2D8A4E"
+        android:pathData="M48,10C27,10 10,27 10,48s17,38 38,38s38,-17 38,-38S69,10 48,10z" />
+    <path
+        android:fillColor="#080C09"
+        android:pathData="M48,16C30.3,16 16,30.3 16,48s14.3,32 32,32s32,-14.3 32,-32S65.7,16 48,16z" />
+    <path
+        android:fillColor="#2D8A4E"
+        android:pathData="M40,36v24l20,-12z" />
+</vector>

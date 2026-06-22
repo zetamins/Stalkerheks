@@ -12,6 +12,9 @@ import (
 	"sync"
 
 	"github.com/erkexzcx/stalkerhek/db"
+	"github.com/erkexzcx/stalkerhek/hls"
+	"github.com/erkexzcx/stalkerhek/proxy"
+	"github.com/erkexzcx/stalkerhek/stalker"
 )
 
 var (
@@ -19,7 +22,81 @@ var (
 	profDir   string
 	processes = make(map[string]*os.Process)
 	procMu    sync.Mutex
+
+	// channelStore is shared with JNI exports for profile start/status
+	channelStore map[string]*stalker.Channel
+	chanMu       sync.RWMutex
+
+	// inProcessMode is set to true on Android/JNI where no standalone binary exists.
+	inProcessMode bool
 )
+
+// SetInProcessMode marks that profiles should be started in the current process (JNI/Android).
+func SetInProcessMode() { inProcessMode = true }
+
+// MarkRunning registers a profile as running in-process (called from JNI nativeStartProfile).
+func MarkRunning(name string) {
+	procMu.Lock()
+	processes[name] = &os.Process{Pid: os.Getpid()}
+	procMu.Unlock()
+}
+
+// SetChannelStore sets the shared channel map (called from JNI init).
+func SetChannelStore(ch map[string]*stalker.Channel) { channelStore = ch; }
+
+// startProfileInProcess loads a profile and starts all services in the current process.
+// Used when the standalone binary doesn't exist (JNI/Android mode).
+func startProfileInProcess(name string) error {
+	p, ok := store.Get(name)
+	if !ok {
+		return os.ErrNotExist
+	}
+	c, err := stalker.LoadProfile(store, name)
+	if err != nil {
+		return err
+	}
+
+	// Start portal, fetch channels, then start HLS + proxy
+	go func() {
+		log.Printf("Connecting to portal %s...", name)
+		if err := c.Portal.Start(); err != nil {
+			log.Printf("Portal %s: %v", name, err)
+		}
+		chs, err := c.Portal.RetrieveChannels()
+		if err != nil {
+			log.Printf("Channels %s: %v", name, err)
+		}
+		chanMu.Lock()
+		if channelStore == nil {
+			channelStore = make(map[string]*stalker.Channel)
+		}
+		for _, ch := range chs {
+			channelStore[ch.CMD] = ch
+		}
+		chanMu.Unlock()
+		log.Printf("Profile %s: loaded %d channels", name, len(chs))
+
+		if c.HLS.Enabled {
+			go func() {
+				hls.SetUserAgent(c.Portal.Model)
+				hls.SetDeviceHeaders(c.Portal.MAC, c.Portal.Model, c.Portal.SerialNumber)
+				hls.Start(channelStore, c.HLS.Bind)
+			}()
+		}
+		if c.Proxy.Enabled {
+			go func() {
+				proxy.Start(c, channelStore)
+			}()
+		}
+	}()
+
+	// Register as running (caller holds procMu)
+	processes[name] = &os.Process{Pid: os.Getpid()}
+
+	log.Printf("Started profile %s in-process (HLS=%s Proxy=%s)", name, c.HLS.Bind, c.Proxy.Bind)
+	_ = p
+	return nil
+}
 
 // Start initializes the dashboard HTTP server.
 func Start(dir string, bind string, s *db.Store, profileName string) {
@@ -41,7 +118,9 @@ func Start(dir string, bind string, s *db.Store, profileName string) {
 	mux.HandleFunc("/api/profiles/logs", handleProfileLogs)
 
 	log.Printf("Dashboard available at http://%s", bind)
-	panic(http.ListenAndServe(bind, mux))
+	if err := http.ListenAndServe(bind, mux); err != nil {
+		log.Printf("Dashboard ListenAndServe error: %v", err)
+	}
 }
 
 func serveDashboard(w http.ResponseWriter, r *http.Request) {
@@ -161,6 +240,17 @@ func handleProfileStart(w http.ResponseWriter, r *http.Request) {
 
 	stopProcess(req.Name)
 
+	// In JNI/Android mode, start profiles in-process instead of spawning a binary.
+	if inProcessMode {
+		if err := startProfileInProcess(req.Name); err != nil {
+			writeJSON(w, map[string]string{"error": "failed to start: " + err.Error()})
+			return
+		}
+		writeJSON(w, map[string]interface{}{"ok": "started", "pid": os.Getpid()})
+		return
+	}
+
+	// Standalone binary mode: spawn a new process
 	cmd := exec.Command(req.Binary, "-profile", req.Name, "-db", profDir)
 	logFile, _ := os.Create(filepath.Join(profDir, req.Name+".log"))
 	cmd.Stdout = logFile
