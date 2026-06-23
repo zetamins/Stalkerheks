@@ -37,8 +37,10 @@ type Portal struct {
 	Signature    string
 	MAC          string
 	Location     string
+	Location2    string // fallback portal URL; tried if Location is unreachable at Start(), mirroring real STBs' portal1/portal2 failover
 	TimeZone     string
 	Token        string
+	Random       string // value returned by the portal's handshake response, used as input to GetHashVersion1-derived fields like hw_version_2
 }
 
 var regexMAC = regexp.MustCompile(`^[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}$`)
@@ -60,6 +62,7 @@ func LoadProfile(store *db.Store, name string) (*Config, error) {
 			Signature:    p.Portal.Signature,
 			MAC:          p.Portal.MAC,
 			Location:     p.Portal.URL,
+			Location2:    p.Portal.URL2,
 			TimeZone:     p.Portal.TimeZone,
 			Token:        p.Portal.Token,
 		},

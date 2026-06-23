@@ -21,6 +21,7 @@ type PortalConfig struct {
 	Signature    string `json:"signature"`
 	MAC          string `json:"mac"`
 	URL          string `json:"url"`
+	URL2         string `json:"url2,omitempty"` // fallback portal URL (real STBs are provisioned with portal1/portal2 and fail over)
 	TimeZone     string `json:"time_zone"`
 	Token        string `json:"token"`
 }
@@ -148,6 +149,9 @@ func (s *Store) Save(p Profile) error {
 
 	// Auto-append API endpoint
 	p.Portal.URL = normalizeURL(p.Portal.URL)
+	if p.Portal.URL2 != "" {
+		p.Portal.URL2 = normalizeURL(p.Portal.URL2)
+	}
 
 	// Auto-derive device IDs from device_id + token
 	if p.Portal.DeviceID2 == "" && p.Portal.DeviceID != "" {

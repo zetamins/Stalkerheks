@@ -20,7 +20,7 @@ func (p *Portal) handshake() error {
 		return err
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) " + p.Model + " stbapp ver: 4 rev: 2116 Mobile Safari/533.3")
+	req.Header.Set("User-Agent", p.UserAgent())
 	req.Header.Set("X-User-Agent", "Model: "+p.Model+"; Link: Ethernet")
 	req.Header.Set("SN", p.SerialNumber)
 	req.Header.Set("Cookie", "PHPSESSID=null; sn="+p.SerialNumber+"; mac="+p.MAC+"; stb_lang=en; timezone="+p.TimeZone)
@@ -39,6 +39,12 @@ func (p *Portal) handshake() error {
 	if err = json.Unmarshal(contents, &tmp); err != nil {
 		log.Println(string(contents))
 		return err
+	}
+
+	if random, ok := tmp.Js["random"]; ok {
+		if s, ok := random.(string); ok {
+			p.Random = s
+		}
 	}
 
 	token, ok := tmp.Js["Token"]

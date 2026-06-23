@@ -500,7 +500,7 @@ func geoProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("Geo proxy: %s", target)
 	req, _ := http.NewRequest("GET", target, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) "+config.Portal.Model+" stbapp")
+	req.Header.Set("User-Agent", config.Portal.UserAgent())
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		http.Error(w, "geo service error", http.StatusBadGateway)

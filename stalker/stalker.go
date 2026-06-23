@@ -11,9 +11,31 @@ import (
 
 // Start connects to stalker portal, reserves token, starts watchdog etc.
 func (p *Portal) Start() error {
-	// Reserve token in Stalker portal
+	// Reserve token in Stalker portal. Real STBs are provisioned with two
+	// portal URLs (portal1/portal2) and fail over to the second if the
+	// first is unreachable; mirror that here.
 	if err := p.handshake(); err != nil {
-		return err
+		if p.Location2 == "" {
+			return err
+		}
+		log.Println("Handshake failed against primary portal URL, trying fallback:", err)
+		p.Location, p.Location2 = p.Location2, p.Location
+		if err := p.handshake(); err != nil {
+			return err
+		}
+	}
+
+	// Submit device profile, as real STB hardware does right after handshake
+	// and before listing channels. Non-fatal: some portals don't require it,
+	// but most real boxes always send it.
+	if err := p.getProfile(); err != nil {
+		log.Println("get_profile failed (continuing anyway):", err)
+	}
+	if err := p.getLocalization(); err != nil {
+		log.Println("get_localization failed (continuing anyway):", err)
+	}
+	if err := p.getMainInfo(); err != nil {
+		log.Println("get_main_info failed (continuing anyway):", err)
 	}
 
 	// Run watchdog function once to check for errors:
@@ -41,7 +63,7 @@ func (p *Portal) httpRequest(link string) ([]byte, error) {
 		return nil, err
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) "+p.Model+" stbapp ver: 4 rev: 2116 Mobile Safari/533.3")
+	req.Header.Set("User-Agent", p.UserAgent())
 	req.Header.Set("X-User-Agent", "Model: "+p.Model+"; Link: Ethernet")
 	req.Header.Set("Authorization", "Bearer "+p.Token)
 	req.Header.Set("SN", p.SerialNumber)

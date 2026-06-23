@@ -1,10 +1,8 @@
 package proxy
 
 import (
-	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -44,7 +42,7 @@ func getRequest(link string, originalRequest *http.Request) (*http.Response, err
 			cookieText := "PHPSESSID=null; sn=" + url.QueryEscape(config.Portal.SerialNumber) + "; mac=" + url.QueryEscape(config.Portal.MAC) + "; stb_lang=en; timezone=" + url.QueryEscape(config.Portal.TimeZone) + ";"
 			req.Header.Set("Cookie", cookieText)
 		case "User-Agent":
-			req.Header.Set("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) "+config.Portal.Model+" stbapp ver: 4 rev: 2116 Mobile Safari/533.3")
+			req.Header.Set("User-Agent", config.Portal.UserAgent())
 		case "X-User-Agent":
 			req.Header.Set("X-User-Agent", "Model: "+config.Portal.Model+"; Link: Ethernet")
 		case "Sn":
@@ -118,56 +116,33 @@ func addHeaders(from, to http.Header) {
 	}
 }
 
+// buildMetrics, buildVersion, buildPrehash and buildHWVersion2 delegate to
+// stalker.Portal's shared implementations (stalker/hash.go) so the proxy's
+// fabricated identity fields use the same corrected GetHashVersion1
+// emulation (MD5, confirmed via firmware disassembly) as the outbound
+// get_profile call.
+func buildMetrics() string {
+	return config.Portal.Metrics()
+}
+
+func buildVersion() string {
+	return config.Portal.VersionString()
+}
+
+func buildPrehash() string {
+	return config.Portal.Prehash()
+}
+
+func buildHWVersion2() string {
+	return config.Portal.HWVersion2()
+}
+
 func generateNewChannelLink(link, id, ch_id string) string {
 	return `{"js":{"id":"` + id + `","cmd":"` + specialLinkEscape(link) + `","streamer_id":0,"link_id":` + ch_id + `,"load":0,"error":""},"text":"array(6) {\n  [\"id\"]=>\n  string(4) \"` + id + `\"\n  [\"cmd\"]=>\n  string(99) \"` + specialLinkEscape(link) + `\"\n  [\"streamer_id\"]=>\n  int(0)\n  [\"link_id\"]=>\n  int(` + ch_id + `)\n  [\"load\"]=>\n  int(0)\n  [\"error\"]=>\n  string(0) \"\"\n}\ngenerated in: 0.01s; query counter: 8; cache hits: 0; cache miss: 0; php errors: 0; sql errors: 0;"}`
 }
 
 func specialLinkEscape(i string) string {
 	return strings.ReplaceAll(i, "/", "\\/")
-}
-
-// buildMetrics builds a fake metrics JSON string with the configured device identity.
-// The portal JS sends metrics as: {"mac":"...","sn":"...","model":"...","type":"STB","uid":"...","random":"..."}
-func buildMetrics() string {
-	m := map[string]string{
-		"mac":   config.Portal.MAC,
-		"sn":    config.Portal.SerialNumber,
-		"model": config.Portal.Model,
-		"type":  "STB",
-		"uid":   config.Portal.DeviceID2,
-	}
-	b, _ := json.Marshal(m)
-	return string(b)
-}
-
-// buildVersion builds a synthetic version string matching what MAG STB boxes send.
-// Format: "ImageDescription: ...; ImageDate: ...; PORTAL version: ...; API Version: ..."
-func buildVersion() string {
-	return "ImageDescription: " + config.Portal.Model + "; ImageDate: 20010101_000000; PORTAL version: 5.6.0; API Version: 0x1811"
-}
-
-// sha1Hex returns the SHA-1 hash of the given string as a 40-char hex string.
-// GetHashVersion1 on real MAG boxes appears to return SHA-1 hashes (40 hex chars).
-func sha1Hex(s string) string {
-	h := sha1.Sum([]byte(s))
-	return hex.EncodeToString(h[:])
-}
-
-// buildPrehash returns a proper hex hash for the prehash parameter.
-// Real STB computes: GetHashVersion1(model, version[:56])
-func buildPrehash() string {
-	ver := buildVersion()
-	if len(ver) > 56 {
-		ver = ver[:56]
-	}
-	return sha1Hex(config.Portal.Model + ver)
-}
-
-// buildHWVersion2 returns a proper hex hash for the hw_version_2 parameter.
-// Real STB computes: GetHashVersion1(JSON.stringify(metrics), random)
-func buildHWVersion2() string {
-	metrics := buildMetrics()
-	return sha1Hex(metrics + randomHex)
 }
 
 // emulateGetUID emulates the MAG STB's GetUID() native function.
