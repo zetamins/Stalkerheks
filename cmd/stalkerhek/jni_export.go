@@ -100,6 +100,16 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeStartProfile(env *C.JNIEn
 		channels = chs
 		log.Printf("Profile %s: loaded %d channels", req.Name, len(chs))
 
+		// Real STBs dispatch get_all_channels (and other loads) before their
+		// first watchdog send, so start the watchdog only after
+		// RetrieveChannels above, not as part of Portal.Start().
+		if c.HLS.Enabled {
+			c.Portal.IsPlayingFunc = hls.IsPlaying
+		}
+		if err := c.Portal.StartWatchdog(); err != nil {
+			log.Printf("Portal %s: failed to start watchdog: %v", req.Name, err)
+		}
+
 		if c.HLS.Enabled {
 			go func() {
 				hls.SetUserAgent(c.Portal.Model)

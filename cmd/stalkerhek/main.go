@@ -61,6 +61,16 @@ func main() {
 		log.Fatalln("no IPTV channels retrieved from Stalker middleware. quitting...")
 	}
 
+	// Real STBs dispatch get_all_channels (and other loads) before their
+	// first watchdog send, so start the watchdog only after RetrieveChannels
+	// above, not as part of Portal.Start().
+	if c.HLS.Enabled {
+		c.Portal.IsPlayingFunc = hls.IsPlaying
+	}
+	if err := c.Portal.StartWatchdog(); err != nil {
+		log.Fatalln("Failed to start watchdog:", err)
+	}
+
 	var wg sync.WaitGroup
 
 	if c.HLS.Enabled {

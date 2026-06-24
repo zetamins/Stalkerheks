@@ -40,6 +40,16 @@ func (p *Portal) Start() error {
 		log.Println("get_modules failed (continuing anyway):", err)
 	}
 
+	return nil
+}
+
+// StartWatchdog sends the first post-boot watchdog ping and starts the
+// periodic watchdog goroutine. Real STBs dispatch get_all_channels (and the
+// other channel/EPG/recording loads) before their first watchdog send
+// (confirmed in the real client's xpcom.common.js boot sequence) — callers
+// should call this only after retrieving the channel list, not from Start()
+// itself, to match that ordering.
+func (p *Portal) StartWatchdog() error {
 	// Run watchdog function once to check for errors. Real STBs send
 	// init=1 only on this first post-boot watchdog call (confirmed in the
 	// real client's watchdog.js: send_request(true) on startup, false on
@@ -112,9 +122,20 @@ func (p *Portal) watchdogUpdate(init bool) error {
 	if init {
 		initVal = "1"
 	}
-	_, err := p.httpRequest(p.Location + "?action=get_events&event_active_id=0&init=" + initVal + "&type=watchdog&cur_play_type=1&JsHttpRequest=1-xml")
+	_, err := p.httpRequest(p.Location + "?action=get_events&event_active_id=0&init=" + initVal + "&type=watchdog&cur_play_type=" + p.curPlayType() + "&JsHttpRequest=1-xml")
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+// curPlayType reports the watchdog's cur_play_type value. Real STBs send 0
+// while idle and 1 (live TV) only while actively playing (confirmed in the
+// real client's watchdog.js get_current_place()); a hardcoded 1 would claim
+// this device is always watching TV even when nothing is being relayed.
+func (p *Portal) curPlayType() string {
+	if p.IsPlayingFunc != nil && p.IsPlayingFunc() {
+		return "1"
+	}
+	return "0"
 }

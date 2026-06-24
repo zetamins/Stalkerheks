@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // Channel stores information about channel in Stalker portal. This is not a real TV channel representation, but details on how to retrieve a working channel's URL.
@@ -21,8 +22,46 @@ type Channel struct {
 	CMD_CH_ID string // Used for Proxy service to generate fake response to new URL request
 }
 
-// NewLink retrieves a link to the working channel. Retrieved link can be played in VLC or Kodi, but expires very soon if not being constantly opened (used).
+// createLinkMaxAttempts caps retries for transient create_link errors.
+const createLinkMaxAttempts = 3
+
+// createLinkRetryDelay is the wait between transient create_link retries.
+const createLinkRetryDelay = 1 * time.Second
+
+// NewLink retrieves a link to the working channel. Retrieved link can be
+// played in VLC or Kodi, but expires very soon if not being constantly
+// opened (used). When retry is true, the real server's two transient error
+// codes ("limit", "temporary_unavailable" — confirmed against Itv.php's
+// createLink) are retried a few times before giving up; the two fatal codes
+// ("nothing_to_play", "link_fault") are never retried.
 func (c *Channel) NewLink(retry bool) (string, error) {
+	attempts := 1
+	if retry {
+		attempts = createLinkMaxAttempts
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		link, err := c.newLinkOnce()
+		if err == nil {
+			return link, nil
+		}
+		lastErr = err
+		if !retry || !isTransientCreateLinkError(err) || attempt == attempts {
+			break
+		}
+		log.Println("create_link transient failure, retrying:", err)
+		time.Sleep(createLinkRetryDelay)
+	}
+	return "", lastErr
+}
+
+func isTransientCreateLinkError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "limit") || strings.Contains(msg, "temporary_unavailable")
+}
+
+func (c *Channel) newLinkOnce() (string, error) {
 	type tmpStruct struct {
 		Js struct {
 			Cmd   string `json:"cmd"`
@@ -95,7 +134,7 @@ func (p *Portal) RetrieveChannels() (map[string]*Channel, error) {
 	}
 	var tmp tmpStruct
 
-	content, err := p.httpRequest(p.Location + "?type=itv&action=get_all_channels&force_ch_link_check=&JsHttpRequest=1-xml")
+	content, err := p.httpRequest(p.Location + "?type=itv&action=get_all_channels&JsHttpRequest=1-xml")
 	if err != nil {
 		return nil, err
 	}

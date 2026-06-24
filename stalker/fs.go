@@ -42,6 +42,13 @@ type Portal struct {
 	Token           string
 	Random          string // value returned by the portal's handshake response, used as input to GetHashVersion1-derived fields like hw_version_2
 	WatchdogTimeout int    // seconds, from get_profile's response; real STBs use this (not a hardcoded value) for the heartbeat interval
+
+	// IsPlayingFunc reports whether this device is currently relaying a
+	// stream to a viewer. Real STBs send the watchdog's cur_play_type as 0
+	// while idle and a nonzero place code only while actually playing; this
+	// hook lets a caller (e.g. the hls package) supply that signal without
+	// stalker importing hls. Left nil, watchdog reports idle (0) always.
+	IsPlayingFunc func() bool
 }
 
 var regexMAC = regexp.MustCompile(`^[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}$`)

@@ -23,6 +23,34 @@ const (
 	hlsKeepAliveIdleTimeout = 120 * time.Second
 )
 
+var (
+	playbackActivityMu   sync.Mutex
+	lastPlaybackActivity time.Time
+)
+
+// markPlaybackActivity records that some channel was just accessed by a
+// viewer. Called from validate() on every content request.
+func markPlaybackActivity() {
+	playbackActivityMu.Lock()
+	lastPlaybackActivity = time.Now()
+	playbackActivityMu.Unlock()
+}
+
+// IsPlaying reports whether any channel has been accessed recently enough to
+// still count as "being watched". Used as stalker.Portal's IsPlayingFunc, so
+// the outbound watchdog's cur_play_type reflects real playback state instead
+// of always claiming live TV is playing. Reuses the same idle threshold as
+// the HLS keep-alive goroutine, since that's this codebase's existing
+// definition of "still being watched".
+func IsPlaying() bool {
+	playbackActivityMu.Lock()
+	defer playbackActivityMu.Unlock()
+	if lastPlaybackActivity.IsZero() {
+		return false
+	}
+	return time.Since(lastPlaybackActivity) <= hlsKeepAliveIdleTimeout
+}
+
 // Logo stores TV channel logo details.
 type Logo struct {
 	Mux              *sync.Mutex
@@ -55,7 +83,7 @@ type Channel struct {
 
 func (c *Channel) validate() error {
 	if !c.isValid() {
-		newLink, err := c.StalkerChannel.NewLink(false)
+		newLink, err := c.StalkerChannel.NewLink(true)
 		if err != nil {
 			return err
 		}
@@ -65,6 +93,7 @@ func (c *Channel) validate() error {
 	}
 
 	c.lastAccess = time.Now()
+	markPlaybackActivity()
 	return nil
 }
 
