@@ -49,6 +49,8 @@ type Portal struct {
 	// hook lets a caller (e.g. the hls package) supply that signal without
 	// stalker importing hls. Left nil, watchdog reports idle (0) always.
 	IsPlayingFunc func() bool
+
+	watchdogStop chan struct{} // closed by StopWatchdog to end the periodic goroutine
 }
 
 var regexMAC = regexp.MustCompile(`^[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}$`)

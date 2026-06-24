@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -23,6 +24,9 @@ var (
 	config *stalker.Config
 
 	channels map[string]*stalker.Channel
+
+	serverMu sync.Mutex
+	server   *http.Server
 
 	// perSTBMu is a map of per-client-IP mutexes. Requests from the same STB are
 	// serialized to avoid Cloudflare 520 errors from concurrent bursts. Different
@@ -99,8 +103,27 @@ func Start(c *stalker.Config, chs map[string]*stalker.Channel) {
 	mux.HandleFunc("/_speedtest/", speedtestProxyHandler)
 	mux.HandleFunc("/", requestHandler)
 
+	srv := &http.Server{Addr: config.Proxy.Bind, Handler: mux}
+	serverMu.Lock()
+	server = srv
+	serverMu.Unlock()
+
 	log.Println("Proxy service should be started!")
-	panic(http.ListenAndServe(config.Proxy.Bind, mux))
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Println("Proxy ListenAndServe error:", err)
+	}
+}
+
+// Stop gracefully shuts down the proxy HTTP server, if running. Safe to call
+// even if Start was never called or has already returned.
+func Stop() {
+	serverMu.Lock()
+	srv := server
+	server = nil
+	serverMu.Unlock()
+	if srv != nil {
+		srv.Shutdown(context.Background())
+	}
 }
 
 func requestHandler(w http.ResponseWriter, r *http.Request) {

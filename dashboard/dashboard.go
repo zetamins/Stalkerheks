@@ -18,10 +18,21 @@ import (
 )
 
 var (
-	store     *db.Store
-	profDir   string
+	store   *db.Store
+	profDir string
+
+	// processes holds real OS subprocess handles (standalone-binary mode
+	// only). Never populate this with a fake/self-referencing Process — it
+	// gets Kill()ed by stopProcess, and killing the current process's own
+	// PID would take down the whole engine (this previously happened in
+	// in-process/Android mode, see inProcessRunning below for the fix).
 	processes = make(map[string]*os.Process)
 	procMu    sync.Mutex
+
+	// inProcessRunning tracks profiles started in-process (JNI/Android),
+	// where there is no separate OS process to kill — stopping means calling
+	// the profile's own stop function instead.
+	inProcessRunning = make(map[string]func())
 
 	// channelStore is shared with JNI exports for profile start/status
 	channelStore map[string]*stalker.Channel
@@ -34,10 +45,19 @@ var (
 // SetInProcessMode marks that profiles should be started in the current process (JNI/Android).
 func SetInProcessMode() { inProcessMode = true }
 
-// MarkRunning registers a profile as running in-process (called from JNI nativeStartProfile).
-func MarkRunning(name string) {
+// MarkRunning registers a profile as running in-process (called from JNI
+// nativeStartProfile) along with its stop function.
+func MarkRunning(name string, stop func()) {
 	procMu.Lock()
-	processes[name] = &os.Process{Pid: os.Getpid()}
+	inProcessRunning[name] = stop
+	procMu.Unlock()
+}
+
+// MarkStopped removes a profile from the in-process running set (called
+// from JNI nativeStopProfile/nativeDeleteProfile after actually stopping it).
+func MarkStopped(name string) {
+	procMu.Lock()
+	delete(inProcessRunning, name)
 	procMu.Unlock()
 }
 
@@ -100,8 +120,18 @@ func startProfileInProcess(name string) error {
 		}
 	}()
 
-	// Register as running (caller holds procMu)
-	processes[name] = &os.Process{Pid: os.Getpid()}
+	// Register as running with a real stop function — never a fake
+	// self-referencing os.Process, which would get Kill()ed as if it were a
+	// subprocess and take down the whole engine (caller holds procMu).
+	inProcessRunning[name] = func() {
+		c.Portal.StopWatchdog()
+		if c.HLS.Enabled {
+			hls.Stop()
+		}
+		if c.Proxy.Enabled {
+			proxy.Stop()
+		}
+	}
 
 	log.Printf("Started profile %s in-process (HLS=%s Proxy=%s)", name, c.HLS.Bind, c.Proxy.Bind)
 	_ = p
@@ -159,15 +189,6 @@ func handleProfiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	list := store.GetAll()
-	// Merge running status
-	procMu.Lock()
-	for i := range list {
-		if proc, ok := processes[list[i].Name]; ok {
-			list[i].Name = list[i].Name // preserve
-			_ = proc
-		}
-	}
-	procMu.Unlock()
 
 	type resp struct {
 		db.Profile
@@ -181,6 +202,9 @@ func handleProfiles(w http.ResponseWriter, r *http.Request) {
 		if proc, ok := processes[p.Name]; ok {
 			r.Status = "running"
 			r.PID = proc.Pid
+		} else if _, ok := inProcessRunning[p.Name]; ok {
+			r.Status = "running"
+			r.PID = os.Getpid()
 		}
 		out = append(out, r)
 	}
@@ -305,12 +329,24 @@ func handleProfileLogs(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+// stopProcess stops a running profile, however it was started. Callers must
+// hold procMu. Real subprocesses (standalone-binary mode) are killed; an
+// in-process profile (JNI/Android mode) is stopped via its own stop
+// function — it must never be Kill()ed, since there's no separate OS
+// process for it and the registered handle previously pointed at this
+// process's own PID, which would take down the whole engine.
 func stopProcess(name string) {
 	if proc, ok := processes[name]; ok {
 		proc.Kill()
 		proc.Wait()
 		delete(processes, name)
 		log.Printf("Stopped profile %s", name)
+		return
+	}
+	if stop, ok := inProcessRunning[name]; ok {
+		stop()
+		delete(inProcessRunning, name)
+		log.Printf("Stopped in-process profile %s", name)
 	}
 }
 

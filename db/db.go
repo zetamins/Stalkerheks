@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -109,13 +110,17 @@ func (s *Store) Get(name string) (Profile, bool) {
 	return p, ok
 }
 
-// GetAll returns all profiles.
+// GetAll returns all profiles, sorted by name. The Android/JNI bridge
+// derives positional integer IDs from this order (since profiles are
+// otherwise keyed only by name) — without a stable sort, those IDs would
+// shuffle on every call, since Go map iteration order is randomized.
 func (s *Store) GetAll() []Profile {
 	m, _ := s.readAll()
 	list := make([]Profile, 0, len(m))
 	for _, p := range m {
 		list = append(list, p)
 	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 	return list
 }
 

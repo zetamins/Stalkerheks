@@ -69,17 +69,32 @@ func (p *Portal) StartWatchdog() error {
 		watchdogInterval = time.Duration(p.WatchdogTimeout) * time.Second
 	}
 
+	p.watchdogStop = make(chan struct{})
+
 	// Transient errors (502, timeouts) are logged but not fatal.
-	go func() {
+	go func(stop chan struct{}) {
 		for {
-			time.Sleep(watchdogInterval)
-			if err := p.watchdogUpdate(false); err != nil {
-				log.Println("Watchdog update failed (will retry):", err)
+			select {
+			case <-time.After(watchdogInterval):
+				if err := p.watchdogUpdate(false); err != nil {
+					log.Println("Watchdog update failed (will retry):", err)
+				}
+			case <-stop:
+				return
 			}
 		}
-	}()
+	}(p.watchdogStop)
 
 	return nil
+}
+
+// StopWatchdog stops the periodic watchdog goroutine started by
+// StartWatchdog. Safe to call even if the watchdog was never started.
+func (p *Portal) StopWatchdog() {
+	if p.watchdogStop != nil {
+		close(p.watchdogStop)
+		p.watchdogStop = nil
+	}
 }
 
 func (p *Portal) httpRequest(link string) ([]byte, error) {
