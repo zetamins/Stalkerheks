@@ -19,5 +19,14 @@ package stalker
 // reporting "X11; Linux <arch>" for Linux builds regardless of the actual
 // windowing backend, but is not a verified literal.
 func (p *Portal) UserAgent() string {
-	return "Mozilla/5.0 (X11; Linux armv7l) AppleWebKit/605.1.15 (KHTML, like Gecko) " + p.Model + " stbapp ver: 4 rev: 2116 Mobile Safari/605.1.15"
+	return BuildUserAgent(p.Model)
+}
+
+// BuildUserAgent builds the same User-Agent string as Portal.UserAgent for a
+// given model, without requiring a full Portal. Exported so other packages
+// (e.g. hls, which talks to the CDN/streaming server directly rather than
+// the portal) can use the same corrected format instead of drifting onto
+// their own copy.
+func BuildUserAgent(model string) string {
+	return "Mozilla/5.0 (X11; Linux armv7l) AppleWebKit/605.1.15 (KHTML, like Gecko) " + model + " stbapp ver: 4 rev: 2116 Mobile Safari/605.1.15"
 }

@@ -10,9 +10,16 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/erkexzcx/stalkerhek/stalker"
 )
 
-var userAgent = "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 4 rev: 2116 Mobile Safari/533.3"
+// userAgent defaults to a generic model until SetUserAgent configures the
+// real one; built via stalker.BuildUserAgent so HLS segment/media requests
+// to the CDN use the same corrected (non-"QtEmbedded") format as the
+// portal-facing requests in stalker/useragent.go, instead of an independent,
+// stale copy of the format that was already disproven there.
+var userAgent = stalker.BuildUserAgent("MAG200")
 
 // Device headers sent with every media download — the streaming server uses
 // these for device identification and stream priority assignment.
@@ -34,7 +41,7 @@ func SetDeviceHeaders(mac, model, serial string) {
 
 // SetUserAgent sets the User-Agent string used for HLS content requests.
 func SetUserAgent(model string) {
-	userAgent = "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) " + model + " stbapp ver: 4 rev: 2116 Mobile Safari/533.3"
+	userAgent = stalker.BuildUserAgent(model)
 }
 
 func download(link string) (content []byte, contentType string, err error) {

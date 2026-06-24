@@ -61,8 +61,15 @@ func getRequest(link string, originalRequest *http.Request) (*http.Response, err
 			// Drop — not needed for GET requests and can trigger WAF rules.
 			continue
 		case "Accept-Encoding":
-			// Pass through the STB's accepted encodings so the portal can compress
-			req.Header.Set(k, v[0])
+			// Never forward this. requestHandler rewrites response bodies as
+			// plain text (forcing use_http_tmp_link, rewriting VOD/external
+			// URLs, stripping watchdog events) — if the portal honors this
+			// and compresses, DisableCompression on this client only skips
+			// auto-decompression for responses *it* asked to compress, not
+			// ones compressed because we explicitly forwarded this header.
+			// A gzip body would make every one of those rewrites silently
+			// no-op instead of erroring, so just never ask for compression.
+			continue
 		default:
 			// Skip internal Go headers and hop-by-hop headers
 			if strings.HasPrefix(k, "X-") && k != "X-User-Agent" {
@@ -118,9 +125,10 @@ func addHeaders(from, to http.Header) {
 
 // buildMetrics, buildVersion, buildPrehash and buildHWVersion2 delegate to
 // stalker.Portal's shared implementations (stalker/hash.go) so the proxy's
-// fabricated identity fields use the same corrected GetHashVersion1
-// emulation (MD5, confirmed via firmware disassembly) as the outbound
-// get_profile call.
+// fabricated identity fields use the same verified GetHashVersion1 emulation
+// (a 3-stage SHA-1 chain with a fixed salt, confirmed via dynamic ARM
+// emulation — an earlier static-disassembly pass had wrongly concluded MD5)
+// as the outbound get_profile call.
 func buildMetrics() string {
 	return config.Portal.Metrics()
 }
