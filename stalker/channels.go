@@ -121,6 +121,7 @@ func (p *Portal) RetrieveChannels() (map[string]*Channel, error) {
 	type tmpStruct struct {
 		Js struct {
 			Data []struct {
+				ID      string `json:"id"`          // Channel ID — stable and unique, unlike Name (some portals list multiple channels under the same name)
 				Name    string `json:"name"`        // Title of channel
 				Cmd     string `json:"cmd"`         // Some sort of URL used to request channel real URL
 				Logo    string `json:"logo"`        // Link to logo
@@ -151,11 +152,22 @@ func (p *Portal) RetrieveChannels() (map[string]*Channel, error) {
 		return nil, err
 	}
 
-	// Build channels list and return
+	// Build channels list and return. Keyed by title since that's what
+	// every URL (/iptv/<title>) and the dashboard/JNI APIs use as the
+	// channel identity — but title alone isn't guaranteed unique (some
+	// portals list multiple distinct channels under the same name; ~7% of
+	// channels collided on one real operator's list), so a colliding name
+	// is disambiguated with the channel's actual ID rather than silently
+	// losing every same-named channel but the last one to a map-key
+	// collision, with the others becoming permanently unreachable.
 	channels := make(map[string]*Channel, len(tmp.Js.Data))
 	for _, v := range tmp.Js.Data {
-		channels[v.Name] = &Channel{
-			Title:     v.Name,
+		title := v.Name
+		if _, exists := channels[title]; exists {
+			title = v.Name + " (" + v.ID + ")"
+		}
+		channels[title] = &Channel{
+			Title:     title,
 			CMD:       v.Cmd,
 			LogoLink:  v.Logo,
 			Portal:    p,

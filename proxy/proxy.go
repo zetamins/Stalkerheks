@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -24,6 +25,16 @@ var (
 	config *stalker.Config
 
 	channels map[string]*stalker.Channel
+
+	// channelsByTitle indexes the same channels by title (name) rather than
+	// by their raw upstream "cmd" string. Needed because this operator's
+	// portal rotates the play_token embedded in "cmd" on every single
+	// get_all_channels fetch — matching by the exact cmd string captured at
+	// startup against a freshly-fetched list (or against whatever a client
+	// echoes back into create_link) would essentially never hit. Title is
+	// stable across fetches, so it's the reliable join key for both the
+	// channel-list cmd rewrite and create_link's fallback resolution.
+	channelsByTitle map[string]*stalker.Channel
 
 	serverMu sync.Mutex
 	server   *http.Server
@@ -82,12 +93,15 @@ func generateRandomHex(n int) string {
 func Start(c *stalker.Config, chs map[string]*stalker.Channel) {
 	config = c
 
-	// Channels will be matched by CMD field, not by title
+	// Channels matched primarily by CMD field; chs is already title-keyed
+	// (stalker.RetrieveChannels builds it that way), so just keep that
+	// indexing around too rather than rebuilding it — see channelsByTitle.
 	newChannels := make(map[string]*stalker.Channel)
 	for _, v := range chs {
 		newChannels[v.CMD] = v
 	}
 	channels = newChannels
+	channelsByTitle = chs
 
 	// extract scheme://hostname:port from given URL, so we don't have to do it later
 	link, err := url.Parse(config.Portal.Location)
@@ -196,23 +210,39 @@ func requestHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Find Stalker channel
+		// Find Stalker channel. tagCMD is usually the original upstream cmd
+		// string, but a compliant client may instead echo back whatever
+		// "cmd" it received from the already-rewritten channel list (see
+		// rewriteChannelListCmds) — an /iptv/<title> URL of our own, not
+		// the upstream's. Fall back to resolving by title in that case.
 		channel, found := channels[tagCMD]
+		if !found {
+			if idx := strings.Index(tagCMD, "/iptv/"); idx >= 0 {
+				if title, err := url.PathUnescape(tagCMD[idx+len("/iptv/"):]); err == nil {
+					channel, found = channelsByTitle[title]
+				}
+			}
+		}
 		if !found {
 			log.Println("STB requested 'create_link', but gave invalid CMD:", tagCMD)
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
 
-		// We must give full path to IPTV stream.
+		// We must give full path to IPTV stream. Deliberately a local var,
+		// not the package-level `destination` (the real portal's base URL,
+		// used by every other forwarded request below) — assigning into
+		// that here used to permanently clobber it after the first
+		// create_link call, misrouting every subsequent request for every
+		// client to the HLS port instead of the real portal.
 		requestHost, _, _ := net.SplitHostPort(r.Host)
 		_, portHLS, _ := net.SplitHostPort(config.HLS.Bind)
-		destination = "http://" + requestHost + ":" + portHLS + "/iptv/" + url.PathEscape(channel.Title)
+		hlsURL := "http://" + requestHost + ":" + portHLS + "/iptv/" + url.PathEscape(channel.Title)
 
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 
-		responseText := generateNewChannelLink(destination, channel.CMD_ID, channel.CMD_CH_ID)
+		responseText := generateNewChannelLink(hlsURL, channel.CMD_ID, channel.CMD_CH_ID)
 		w.Write([]byte(responseText))
 
 		fmt.Println(responseText)
@@ -328,14 +358,32 @@ func requestHandler(w http.ResponseWriter, r *http.Request) {
 	body := string(bodyBytes)
 
 	// Force use_http_tmp_link=1 and use_load_balancing=1 in channel list responses
-	// so the STB calls create_link (which we rewrite to HLS) instead of playing
-	// direct stream URLs that bypass the proxy.
+	// so compliant STB firmware calls create_link (which we rewrite to HLS)
+	// instead of playing the embedded "cmd" URL directly. This only helps
+	// against clients that actually honor those flags, though — see below.
 	if tagAction == "get_all_channels" || tagAction == "get_all_fav_channels" || tagAction == "get_ordered_list" {
 		body = strings.ReplaceAll(body, `"use_http_tmp_link":"0"`, `"use_http_tmp_link":"1"`)
 		body = strings.ReplaceAll(body, `"use_http_tmp_link":0`, `"use_http_tmp_link":1`)
 		body = strings.ReplaceAll(body, `"use_load_balancing":"0"`, `"use_load_balancing":"1"`)
 		body = strings.ReplaceAll(body, `"use_load_balancing":0`, `"use_load_balancing":1`)
-		log.Printf("  -> %s body modified (forced tmp_link)", tagAction)
+
+		// The real portal's "cmd" field is already a fully-playable URL
+		// (e.g. "ffmpeg http://realhost/play/live.php?mac=<real-mac>&stream=..&play_token=..")
+		// exposing the real upstream server, the configured MAC, and a
+		// session token, directly. use_http_tmp_link/use_load_balancing
+		// only changes behavior on STB firmware that honors them — many
+		// third-party players (confirmed: TiviMate, STBEmu) recognize the
+		// "ffmpeg <url>" convention as already-resolved and play it
+		// straight away, skipping create_link (and therefore the HLS
+		// relay) entirely. That leaves channel playback fully independent
+		// of this proxy and leaks the real device identity to the
+		// upstream — confirmed live: with this proxy process killed
+		// outright, the raw "cmd" URL from this exact response was still
+		// directly streamable from the real CDN. So the "cmd" field itself
+		// must be rewritten here too, not just the flags.
+		requestHost, _, _ := net.SplitHostPort(r.Host)
+		body = rewriteChannelListCmds(body, requestHost)
+		log.Printf("  -> %s body modified (forced tmp_link, cmd rewritten)", tagAction)
 	}
 
 	// For VOD/karaoke/archive create_link responses, rewrite the stream URL
@@ -361,12 +409,20 @@ func requestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send response — forward the real portal's headers but override Set-Cookie
-	// to keep STB browser cookie state clean
+	// to keep STB browser cookie state clean.
+	//
+	// Writing bodyBytes (the original, pre-rewrite bytes) here instead of
+	// body (the rewritten string) was a real bug: every rewrite above —
+	// forcing use_http_tmp_link/use_load_balancing, stripping watchdog
+	// events, rewriting VOD/external URLs, and the channel-list cmd
+	// rewrite — computed a modified body and then this function discarded
+	// it and sent the client the unmodified original anyway. None of those
+	// rewrites were ever actually reaching clients.
 	addHeaders(resp.Header, w.Header())
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
 	w.Header().Set("Set-Cookie", "PHPSESSID=null; path=/;")
 	w.WriteHeader(resp.StatusCode)
-	w.Write(bodyBytes)
+	w.Write([]byte(body))
 }
 
 // vodHandler reverse-proxies VOD media content. The STB requests
@@ -460,6 +516,151 @@ func rewriteVodResponse(body string, requestHost string) string {
 		break
 	}
 	return body
+}
+
+// jsonStringField extracts the value of the next `"key":"value"` occurrence
+// in body at or after offset i, respecting JSON backslash escapes. Returns
+// the raw (still-escaped) value, its unescaped form, and the offset just
+// past the closing quote — or ok=false if key doesn't occur again.
+func jsonStringField(body, key string, i int) (raw, unescaped string, next int, ok bool) {
+	marker := `"` + key + `":"`
+	idx := strings.Index(body[i:], marker)
+	if idx < 0 {
+		return "", "", 0, false
+	}
+	start := i + idx + len(marker)
+	end := start
+	for end < len(body) {
+		if body[end] == '\\' {
+			end += 2
+			continue
+		}
+		if body[end] == '"' {
+			break
+		}
+		end++
+	}
+	if end > len(body) {
+		end = len(body)
+	}
+	raw = body[start:end]
+	return raw, unescapeJSONString(raw), end, true
+}
+
+// unescapeJSONString decodes a JSON string's escape sequences (\uXXXX,
+// \", \\, \/, \n, etc.) properly, by handing it to encoding/json rather
+// than hand-rolling it. A plain strings.ReplaceAll(raw, `\/`, `/`) here
+// previously missed \uXXXX entirely — channel names with non-ASCII
+// characters (confirmed: ~7% of one real operator's list, e.g. "ᴿᴬᵂ"
+// stylized text) never matched stalker.Channel's properly-decoded map
+// key, so those channels' cmd fields were silently left unrewritten.
+func unescapeJSONString(raw string) string {
+	var s string
+	if err := json.Unmarshal([]byte(`"`+raw+`"`), &s); err != nil {
+		return raw
+	}
+	return s
+}
+
+// lastJSONStringFieldBefore finds the closest `"key":"value"` occurrence
+// ending at or before offset, searching backward. Used to recover a
+// channel's "id" field given the position of its "name" field: per the
+// real portal's field order ("id" immediately precedes "name" within each
+// channel object), the closest preceding "id" belongs to the same object,
+// whereas scanning forward from the start of the whole body risks matching
+// a *different* channel's "id" (e.g. one nested inside the previous
+// channel's "cmds" sub-array) instead.
+func lastJSONStringFieldBefore(body, key string, before int) (unescaped string, ok bool) {
+	marker := `"` + key + `":"`
+	idx := strings.LastIndex(body[:before], marker)
+	if idx < 0 {
+		return "", false
+	}
+	start := idx + len(marker)
+	end := start
+	for end < before && end < len(body) {
+		if body[end] == '\\' {
+			end += 2
+			continue
+		}
+		if body[end] == '"' {
+			break
+		}
+		end++
+	}
+	return unescapeJSONString(body[start:end]), true
+}
+
+// rewriteChannelListCmds rewrites every channel's raw "cmd" field in a
+// get_all_channels/get_all_fav_channels/get_ordered_list response so it
+// points at our own HLS relay instead of exposing the real upstream's
+// directly-playable URL (which embeds the real MAC and a session token —
+// confirmed independently streamable straight from the real CDN with this
+// proxy not even running).
+//
+// Matches each channel object by its "name" field, not by "cmd" itself:
+// this operator's portal rotates the play_token inside "cmd" on every
+// single fetch, so matching the live list against the channels map (built
+// from a one-time startup snapshot) by exact cmd string would essentially
+// never hit. "name" is stable, present in every channel object right
+// alongside "cmd", and is exactly how stalker.Channel keys its own channel
+// map (see channelsByTitle) — except for channels whose name collided with
+// another channel's at snapshot time, which RetrieveChannels disambiguates
+// as "name (id)"; this falls back to that same composite key, built from
+// the live response's own "id" field, when the plain name misses.
+func rewriteChannelListCmds(body, requestHost string) string {
+	_, portHLS, _ := net.SplitHostPort(config.HLS.Bind)
+
+	var sb strings.Builder
+	sb.Grow(len(body))
+	i := 0
+	for {
+		nameRaw, name, afterName, ok := jsonStringField(body, "name", i)
+		if !ok {
+			sb.WriteString(body[i:])
+			break
+		}
+		cmdRaw, _, afterCmd, ok := jsonStringField(body, "cmd", afterName)
+		if !ok {
+			sb.WriteString(body[i:])
+			break
+		}
+
+		channel, found := channelsByTitle[name]
+		if !found {
+			// Use the raw (still JSON-escaped) length here, not the
+			// unescaped name's — they can differ (e.g. "\/" vs "/"), and
+			// this offset must line up with the actual bytes in body.
+			if id, idOK := lastJSONStringFieldBefore(body, "id", afterName-len(nameRaw)); idOK {
+				channel, found = channelsByTitle[name+" ("+id+")"]
+			}
+		}
+		if !found {
+			// Unmatched — a channel added upstream after our startup
+			// snapshot. Leave this one "cmd" as-is rather than guess, and
+			// keep scanning for the rest.
+			sb.WriteString(body[i:afterCmd])
+			i = afterCmd
+			continue
+		}
+
+		newURL := "http://" + requestHost + ":" + portHLS + "/iptv/" + url.PathEscape(channel.Title)
+		replacement := newURL
+		if strings.HasPrefix(strings.ReplaceAll(cmdRaw, `\/`, `/`), "ffmpeg ") {
+			replacement = "ffmpeg " + newURL
+		}
+
+		// afterCmd points at "cmd"'s closing quote (not yet consumed); the
+		// value itself starts right after the opening quote, at
+		// afterCmd-len(cmdRaw). Write up through that opening quote, then
+		// the rewritten value, then resume scanning from the closing quote
+		// onward (so it's preserved by the next iteration's leading slice).
+		valueStart := afterCmd - len(cmdRaw)
+		sb.WriteString(body[i:valueStart])
+		sb.WriteString(specialLinkEscape(replacement))
+		i = afterCmd
+	}
+	return sb.String()
 }
 
 func min(a, b int) int {
