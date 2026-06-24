@@ -94,10 +94,24 @@ func main() {
 	}
 
 	if c.Dashboard.Enabled {
+		// Register this binary's own profile as running with a real stop
+		// function (stop watchdog/HLS/proxy) rather than a fake
+		// self-referencing process handle — stopping/deleting this profile
+		// from the dashboard UI must not Kill() this process's own PID.
+		dashboard.MarkRunning(*flagProfile, func() {
+			c.Portal.StopWatchdog()
+			if c.HLS.Enabled {
+				hls.Stop()
+			}
+			if c.Proxy.Enabled {
+				proxy.Stop()
+			}
+		})
+
 		wg.Add(1)
 		go func() {
 			log.Println("Starting dashboard...")
-			dashboard.Start(*flagDBDir, c.Dashboard.Bind, store, *flagProfile)
+			dashboard.Start(*flagDBDir, c.Dashboard.Bind, store)
 			wg.Done()
 		}()
 	}

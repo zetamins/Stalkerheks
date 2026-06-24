@@ -96,17 +96,20 @@ func LoadProfile(store *db.Store, name string) (*Config, error) {
 		},
 	}
 
-	if err := c.validate(); err != nil {
-		return nil, err
-	}
-
 	// device_id2 is keyed only by device_id+token (both already known), so
 	// it can be resolved once here rather than persisted — unlike signature
 	// (keyed by the handshake's random, which doesn't exist yet), it's safe
 	// to fill in eagerly. A manually-configured value (e.g. matching an
-	// already-authorized real device) is left untouched.
+	// already-authorized real device) is left untouched. This must run
+	// before validate() below, since validate() requires DeviceID2 to be
+	// non-empty — every freshly auto-generated profile has it empty until
+	// derived here.
 	if c.Portal.DeviceID2 == "" && c.Portal.DeviceID != "" && c.Portal.UIDSecret != "" {
 		c.Portal.DeviceID2 = c.Portal.GetUID("device_id", c.Portal.Token)
+	}
+
+	if err := c.validate(); err != nil {
+		return nil, err
 	}
 
 	return c, nil

@@ -62,7 +62,7 @@ func MarkStopped(name string) {
 }
 
 // SetChannelStore sets the shared channel map (called from JNI init).
-func SetChannelStore(ch map[string]*stalker.Channel) { channelStore = ch; }
+func SetChannelStore(ch map[string]*stalker.Channel) { channelStore = ch }
 
 // startProfileInProcess loads a profile and starts all services in the current process.
 // Used when the standalone binary doesn't exist (JNI/Android mode).
@@ -138,16 +138,17 @@ func startProfileInProcess(name string) error {
 	return nil
 }
 
-// Start initializes the dashboard HTTP server.
-func Start(dir string, bind string, s *db.Store, profileName string) {
+// Start initializes the dashboard HTTP server. If this binary is itself
+// running a profile directly (the standalone single-profile mode in
+// cmd/stalkerhek/main.go), the caller must register it via MarkRunning with
+// a real stop function before calling Start — never via a fake
+// self-referencing os.Process here, which would get Kill()ed by
+// stopProcess and take down the whole engine (the exact bug this dashboard
+// package's processes/inProcessRunning split was introduced to fix).
+func Start(dir string, bind string, s *db.Store) {
 	store = s
 	profDir = dir
 	os.MkdirAll(profDir, 0755)
-
-	// Register the main process so the dashboard shows it as running
-	if profileName != "" {
-		processes[profileName] = &os.Process{Pid: os.Getpid()}
-	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", serveDashboard)
@@ -303,7 +304,9 @@ func handleProfileStop(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
-	var req struct{ Name string `json:"name"` }
+	var req struct {
+		Name string `json:"name"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", 400)
 		return

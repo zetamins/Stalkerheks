@@ -75,7 +75,7 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeInit(env *C.JNIEnv, cls C
 	dashboard.SetInProcessMode()
 
 	// Start dashboard web UI on 0.0.0.0:8080 (runs ListenAndServe in this goroutine)
-	go dashboard.Start(dataDir, "0.0.0.0:8080", store, "")
+	go dashboard.Start(dataDir, "0.0.0.0:8080", store)
 
 	return makeStr(env, fmt.Sprintf(`{"ok":true,"profiles_loaded":%d}`, len(profiles)))
 }

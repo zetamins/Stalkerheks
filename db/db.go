@@ -47,9 +47,9 @@ type DashboardConfig struct {
 
 // Profile is a complete stalkerhek profile.
 type Profile struct {
-	Name      string        `json:"name"`
-	Portal    PortalConfig  `json:"portal"`
-	Services  ServiceConfig `json:"services"`
+	Name      string          `json:"name"`
+	Portal    PortalConfig    `json:"portal"`
+	Services  ServiceConfig   `json:"services"`
 	Dashboard DashboardConfig `json:"dashboard,omitempty"`
 }
 
