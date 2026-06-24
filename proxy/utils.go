@@ -1,8 +1,6 @@
 package proxy
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"net/http"
 	"net/url"
 	"strings"
@@ -145,31 +143,23 @@ func buildHWVersion2() string {
 	return config.Portal.HWVersion2()
 }
 
+// buildSignature resolves the signature query param the same way
+// stalker.Portal does for its own outbound get_profile call: a manually
+// configured override if set, otherwise GetUID(randomHex) — randomHex is
+// this proxy's own fabricated handshake random, returned to every
+// downstream STB it impersonates the portal for, so it plays the same role
+// here that a real handshake's random plays in the outbound client.
+func buildSignature() string {
+	if config.Portal.Signature != "" {
+		return config.Portal.Signature
+	}
+	return config.Portal.GetUID(randomHex)
+}
+
 func generateNewChannelLink(link, id, ch_id string) string {
 	return `{"js":{"id":"` + id + `","cmd":"` + specialLinkEscape(link) + `","streamer_id":0,"link_id":` + ch_id + `,"load":0,"error":""},"text":"array(6) {\n  [\"id\"]=>\n  string(4) \"` + id + `\"\n  [\"cmd\"]=>\n  string(99) \"` + specialLinkEscape(link) + `\"\n  [\"streamer_id\"]=>\n  int(0)\n  [\"link_id\"]=>\n  int(` + ch_id + `)\n  [\"load\"]=>\n  int(0)\n  [\"error\"]=>\n  string(0) \"\"\n}\ngenerated in: 0.01s; query counter: 8; cache hits: 0; cache miss: 0; php errors: 0; sql errors: 0;"}`
 }
 
 func specialLinkEscape(i string) string {
 	return strings.ReplaceAll(i, "/", "\\/")
-}
-
-// emulateGetUID emulates the MAG STB's GetUID() native function.
-// On real hardware, GetUID uses a hardware-bound secret key stored in a secure
-// element (Trustonic TEE). We can't access that key, so we use the configured
-// DeviceID as the base secret and derive values with SHA-256 — producing the
-// same 64-char hex format as real MAG hardware.
-//
-// Usage patterns from portal JS:
-//   GetUID()               → device_id  (persistent hardware ID)
-//   GetUID(random)          → signature  (keyed by handshake random)
-//   GetUID('device_id', tok)→ device_id2 (keyed by token)
-//   GetUID(tok) == GetUID(tok,tok) → always true on real HW (second arg ignored)
-func emulateGetUID(args ...string) string {
-	h := sha256.New()
-	h.Write([]byte(config.Portal.DeviceID))
-	for _, a := range args {
-		h.Write([]byte(":"))
-		h.Write([]byte(a))
-	}
-	return hex.EncodeToString(h.Sum(nil))
 }

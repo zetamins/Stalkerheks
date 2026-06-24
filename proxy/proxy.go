@@ -239,9 +239,11 @@ func requestHandler(w http.ResponseWriter, r *http.Request) {
 		query["device_id2"] = []string{config.Portal.DeviceID2}
 	}
 
-	// Signature
+	// Signature — keyed by randomHex (this proxy's own fabricated handshake
+	// random), matching how a real device recomputes this per-handshake
+	// rather than reusing one static value.
 	if _, exists := query["signature"]; exists {
-		query["signature"] = []string{config.Portal.Signature}
+		query["signature"] = []string{buildSignature()}
 	}
 
 	// STB type / model

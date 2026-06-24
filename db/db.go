@@ -1,7 +1,7 @@
 package db
 
 import (
-	"crypto/sha256"
+	cryptorand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"io/ioutil"
@@ -25,6 +25,12 @@ type PortalConfig struct {
 	URL2         string `json:"url2,omitempty"` // fallback portal URL (real STBs are provisioned with portal1/portal2 and fail over)
 	TimeZone     string `json:"time_zone"`
 	Token        string `json:"token"`
+
+	// UIDSecret is the software stand-in for the Hardware Unique Key a real
+	// STB's Trustonic TEE secure element would hold — the root secret
+	// device_id2/signature are derived from (see stalker.Portal.GetUID).
+	// Auto-generated once if empty, like Token.
+	UIDSecret string `json:"uid_secret,omitempty"`
 }
 
 // ServiceConfig holds bind addresses for HLS and proxy.
@@ -147,27 +153,27 @@ func (s *Store) Save(p Profile) error {
 		p.Dashboard.Bind = "0.0.0.0:8080"
 	}
 
-	// Auto-generate token if empty (must be before device ID derivation)
+	// Auto-generate token if empty
 	if p.Portal.Token == "" {
 		p.Portal.Token = randomToken()
+	}
+
+	// Auto-generate the root secret device_id2/signature derive from (the
+	// software stand-in for a real STB's TEE-held Hardware Unique Key) if
+	// empty. device_id2 and signature themselves are deliberately NOT
+	// derived/stored here: device_id2 only needs device_id+token (both
+	// already known) so stalker.LoadProfile resolves it on load instead of
+	// duplicating that logic here; signature is keyed by the handshake's
+	// random nonce, which doesn't exist yet at save time, so it's always
+	// computed fresh per-handshake in stalker (see Portal.signature()).
+	if p.Portal.UIDSecret == "" {
+		p.Portal.UIDSecret = randomUIDSecret()
 	}
 
 	// Auto-append API endpoint
 	p.Portal.URL = normalizeURL(p.Portal.URL)
 	if p.Portal.URL2 != "" {
 		p.Portal.URL2 = normalizeURL(p.Portal.URL2)
-	}
-
-	// Auto-derive device IDs from device_id + token
-	if p.Portal.DeviceID2 == "" && p.Portal.DeviceID != "" {
-		h := sha256.New()
-		h.Write([]byte(p.Portal.DeviceID + ":device_id:" + p.Portal.Token))
-		p.Portal.DeviceID2 = hex.EncodeToString(h.Sum(nil))
-	}
-	if p.Portal.Signature == "" && p.Portal.DeviceID != "" {
-		h := sha256.New()
-		h.Write([]byte(p.Portal.DeviceID + ":signature"))
-		p.Portal.Signature = hex.EncodeToString(h.Sum(nil))
 	}
 
 	m[p.Name] = p
@@ -197,4 +203,20 @@ func randomToken() string {
 		b[i] = charset[rand.Intn(len(charset))]
 	}
 	return string(b)
+}
+
+// randomUIDSecret generates a root secret for stalker.Portal.GetUID — the
+// software stand-in for a real STB's TEE-held Hardware Unique Key.
+// Uses crypto/rand rather than randomToken's math/rand: this value is used
+// as actual HMAC key material, not just an opaque session token, so it
+// needs to be unpredictable rather than just unique-looking.
+func randomUIDSecret() string {
+	b := make([]byte, 32)
+	if _, err := cryptorand.Read(b); err != nil {
+		// fallback in the astronomically unlikely event of crypto/rand failure
+		for i := range b {
+			b[i] = byte(i ^ 0x5A)
+		}
+	}
+	return hex.EncodeToString(b)
 }

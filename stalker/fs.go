@@ -43,6 +43,11 @@ type Portal struct {
 	Random          string // value returned by the portal's handshake response, used as input to GetHashVersion1-derived fields like hw_version_2
 	WatchdogTimeout int    // seconds, from get_profile's response; real STBs use this (not a hardcoded value) for the heartbeat interval
 
+	// UIDSecret is the software stand-in for the Hardware Unique Key a real
+	// STB's Trustonic TEE would hold — the root secret GetUID() derives
+	// device_id2/signature from. See GetUID in stalker/uid.go.
+	UIDSecret string
+
 	// IsPlayingFunc reports whether this device is currently relaying a
 	// stream to a viewer. Real STBs send the watchdog's cur_play_type as 0
 	// while idle and a nonzero place code only while actually playing; this
@@ -75,6 +80,7 @@ func LoadProfile(store *db.Store, name string) (*Config, error) {
 			Location2:    p.Portal.URL2,
 			TimeZone:     p.Portal.TimeZone,
 			Token:        p.Portal.Token,
+			UIDSecret:    p.Portal.UIDSecret,
 		},
 		HLS: Service{
 			Enabled: true,
@@ -93,6 +99,16 @@ func LoadProfile(store *db.Store, name string) (*Config, error) {
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
+
+	// device_id2 is keyed only by device_id+token (both already known), so
+	// it can be resolved once here rather than persisted — unlike signature
+	// (keyed by the handshake's random, which doesn't exist yet), it's safe
+	// to fill in eagerly. A manually-configured value (e.g. matching an
+	// already-authorized real device) is left untouched.
+	if c.Portal.DeviceID2 == "" && c.Portal.DeviceID != "" && c.Portal.UIDSecret != "" {
+		c.Portal.DeviceID2 = c.Portal.GetUID("device_id", c.Portal.Token)
+	}
+
 	return c, nil
 }
 

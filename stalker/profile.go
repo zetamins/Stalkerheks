@@ -33,7 +33,7 @@ func (p *Portal) getProfile() error {
 	params.Set("video_out", "hdmi")
 	params.Set("device_id", p.DeviceID)
 	params.Set("device_id2", p.DeviceID2)
-	params.Set("signature", p.Signature)
+	params.Set("signature", p.signature())
 	params.Set("auth_second_step", "1")
 	params.Set("hw_version", "1.0.00")
 	params.Set("not_valid_token", "0")
