@@ -2,6 +2,7 @@ package stalker
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/url"
 	"strings"
@@ -24,7 +25,8 @@ type Channel struct {
 func (c *Channel) NewLink(retry bool) (string, error) {
 	type tmpStruct struct {
 		Js struct {
-			Cmd string `json:"cmd"`
+			Cmd   string `json:"cmd"`
+			Error string `json:"error"`
 		} `json:"js"`
 	}
 	var tmp tmpStruct
@@ -38,6 +40,20 @@ func (c *Channel) NewLink(retry bool) (string, error) {
 	if err := json.Unmarshal(content, &tmp); err != nil {
 		log.Println("Failed to retrieve new link...")
 		return "", err
+	}
+
+	// The real server's create_link can fail in two distinct shapes: a
+	// normal response with a non-empty "error" field (e.g. "limit",
+	// "nothing_to_play"), or — when ad campaigns are configured for the
+	// itv placement — an entirely different ad-playlist array shape that
+	// silently decodes to an empty Cmd here. Either way, an empty Cmd is
+	// never a valid playable link, so surface it as an error rather than
+	// returning "" as if it were a successful, working link.
+	if tmp.Js.Error != "" {
+		return "", errors.New("create_link failed: " + tmp.Js.Error)
+	}
+	if tmp.Js.Cmd == "" {
+		return "", errors.New("create_link returned an empty command (channel unavailable or ad-playlist response)")
 	}
 
 	strs := strings.Split(tmp.Js.Cmd, " ")

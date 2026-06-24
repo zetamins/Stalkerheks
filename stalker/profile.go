@@ -1,6 +1,7 @@
 package stalker
 
 import (
+	"encoding/json"
 	"net/url"
 	"strconv"
 	"time"
@@ -12,7 +13,12 @@ import (
 // playback features or anti-clone checks on a profile having been submitted
 // with a plausible device identity (device_id/device_id2/signature, hashes,
 // hardware descriptors) — skipping it is a common way STB emulators get
-// flagged or degraded as "not a real box".
+// flagged or degraded as "not a real box". This exact parameter set/order was
+// confirmed against the real Ministra client JS (xpcom.common.js).
+//
+// The response also carries the server's preferred watchdog_timeout — real
+// STBs read it here (not a separate call) and use it for the heartbeat
+// interval, so we capture it onto Portal for Start() to use.
 func (p *Portal) getProfile() error {
 	params := url.Values{}
 	params.Set("type", "stb")
@@ -38,19 +44,41 @@ func (p *Portal) getProfile() error {
 	params.Set("timestamp", strconv.FormatInt(time.Now().Unix(), 10))
 	params.Set("JsHttpRequest", "1-xml")
 
-	_, err := p.httpRequest(p.Location + "?" + params.Encode())
-	return err
+	body, err := p.httpRequest(p.Location + "?" + params.Encode())
+	if err != nil {
+		return err
+	}
+
+	type tmpStruct struct {
+		Js struct {
+			WatchdogTimeout interface{} `json:"watchdog_timeout"`
+		} `json:"js"`
+	}
+	var tmp tmpStruct
+	if err := json.Unmarshal(body, &tmp); err == nil {
+		switch v := tmp.Js.WatchdogTimeout.(type) {
+		case float64:
+			if v > 0 {
+				p.WatchdogTimeout = int(v)
+			}
+		case string:
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				p.WatchdogTimeout = n
+			}
+		}
+	}
+	return nil
 }
 
-// getLocalization and getMainInfo mirror two more calls real STBs commonly
-// make during boot, right after get_profile and before listing channels.
-// Non-fatal: not every portal deployment requires them.
+// getLocalization and getModules mirror two more calls real STBs make during
+// boot, right after get_profile and before listing channels. Non-fatal: not
+// every portal deployment requires them.
 func (p *Portal) getLocalization() error {
 	_, err := p.httpRequest(p.Location + "?type=stb&action=get_localization&JsHttpRequest=1-xml")
 	return err
 }
 
-func (p *Portal) getMainInfo() error {
-	_, err := p.httpRequest(p.Location + "?type=account_info&action=get_main_info&JsHttpRequest=1-xml")
+func (p *Portal) getModules() error {
+	_, err := p.httpRequest(p.Location + "?type=stb&action=get_modules&JsHttpRequest=1-xml")
 	return err
 }

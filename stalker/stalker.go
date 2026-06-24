@@ -27,28 +27,43 @@ func (p *Portal) Start() error {
 
 	// Submit device profile, as real STB hardware does right after handshake
 	// and before listing channels. Non-fatal: some portals don't require it,
-	// but most real boxes always send it.
+	// but most real boxes always send it. (get_main_info is deliberately NOT
+	// called here — confirmed against the real Ministra client JS that it's
+	// only fired when a user opens the Account screen, never during boot.)
 	if err := p.getProfile(); err != nil {
 		log.Println("get_profile failed (continuing anyway):", err)
 	}
 	if err := p.getLocalization(); err != nil {
 		log.Println("get_localization failed (continuing anyway):", err)
 	}
-	if err := p.getMainInfo(); err != nil {
-		log.Println("get_main_info failed (continuing anyway):", err)
+	if err := p.getModules(); err != nil {
+		log.Println("get_modules failed (continuing anyway):", err)
 	}
 
-	// Run watchdog function once to check for errors:
-	if err := p.watchdogUpdate(); err != nil {
+	// Run watchdog function once to check for errors. Real STBs send
+	// init=1 only on this first post-boot watchdog call (confirmed in the
+	// real client's watchdog.js: send_request(true) on startup, false on
+	// every subsequent tick) — never sending it at all is itself an
+	// unrealistic pattern, since genuine hardware reports a fresh boot
+	// every time it reconnects (power cycle, network drop, portal reload).
+	if err := p.watchdogUpdate(true); err != nil {
 		return err
 	}
 
-	// Run watchdog function every 2 minutes.
+	// Real STBs default to a 30s watchdog interval (confirmed in the real
+	// client's watchdog.js) and use get_profile's "watchdog_timeout" field
+	// when the portal specifies one — a fixed 2-minute interval is both
+	// slower than genuine hardware and ignores the server's preference.
+	watchdogInterval := 30 * time.Second
+	if p.WatchdogTimeout > 0 {
+		watchdogInterval = time.Duration(p.WatchdogTimeout) * time.Second
+	}
+
 	// Transient errors (502, timeouts) are logged but not fatal.
 	go func() {
 		for {
-			time.Sleep(2 * time.Minute)
-			if err := p.watchdogUpdate(); err != nil {
+			time.Sleep(watchdogInterval)
+			if err := p.watchdogUpdate(false); err != nil {
 				log.Println("Watchdog update failed (will retry):", err)
 			}
 		}
@@ -90,9 +105,14 @@ func (p *Portal) httpRequest(link string) ([]byte, error) {
 	return contents, nil
 }
 
-// WatchdogUpdate performs watchdog update request.
-func (p *Portal) watchdogUpdate() error {
-	_, err := p.httpRequest(p.Location + "?action=get_events&event_active_id=0&init=0&type=watchdog&cur_play_type=1&JsHttpRequest=1-xml")
+// watchdogUpdate performs a watchdog update request. init should be true only
+// for the first call after a fresh connection (matches real STB behavior).
+func (p *Portal) watchdogUpdate(init bool) error {
+	initVal := "0"
+	if init {
+		initVal = "1"
+	}
+	_, err := p.httpRequest(p.Location + "?action=get_events&event_active_id=0&init=" + initVal + "&type=watchdog&cur_play_type=1&JsHttpRequest=1-xml")
 	if err != nil {
 		return err
 	}

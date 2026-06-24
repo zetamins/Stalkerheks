@@ -30,17 +30,18 @@ type Dashboard struct {
 
 // Portal represents a Stalker portal connection.
 type Portal struct {
-	Model        string
-	SerialNumber string
-	DeviceID     string
-	DeviceID2    string
-	Signature    string
-	MAC          string
-	Location     string
-	Location2    string // fallback portal URL; tried if Location is unreachable at Start(), mirroring real STBs' portal1/portal2 failover
-	TimeZone     string
-	Token        string
-	Random       string // value returned by the portal's handshake response, used as input to GetHashVersion1-derived fields like hw_version_2
+	Model           string
+	SerialNumber    string
+	DeviceID        string
+	DeviceID2       string
+	Signature       string
+	MAC             string
+	Location        string
+	Location2       string // fallback portal URL; tried if Location is unreachable at Start(), mirroring real STBs' portal1/portal2 failover
+	TimeZone        string
+	Token           string
+	Random          string // value returned by the portal's handshake response, used as input to GetHashVersion1-derived fields like hw_version_2
+	WatchdogTimeout int    // seconds, from get_profile's response; real STBs use this (not a hardcoded value) for the heartbeat interval
 }
 
 var regexMAC = regexp.MustCompile(`^[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}$`)
