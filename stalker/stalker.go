@@ -97,22 +97,19 @@ func (p *Portal) StopWatchdog() {
 	}
 }
 
+// httpRedirectClient never auto-follows redirects: Go's default client
+// strips Authorization and Cookie headers whenever a redirect crosses to a
+// different host (e.g. portal -> CDN), which silently breaks multi-hop
+// redirect chains. httpRequest follows redirects itself instead, reapplying
+// the full header set on every hop.
+var httpRedirectClient = &http.Client{
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 func (p *Portal) httpRequest(link string) ([]byte, error) {
-	req, err := http.NewRequest("GET", link, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("User-Agent", p.UserAgent())
-	req.Header.Set("X-User-Agent", "Model: "+p.Model+"; Link: Ethernet")
-	req.Header.Set("Authorization", "Bearer "+p.Token)
-	req.Header.Set("SN", p.SerialNumber)
-
-	cookieText := "PHPSESSID=null; sn=" + url.QueryEscape(p.SerialNumber) + "; mac=" + url.QueryEscape(p.MAC) + "; stb_lang=en; timezone=" + url.QueryEscape(p.TimeZone) + ";"
-
-	req.Header.Set("Cookie", cookieText)
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := p.doHTTPRequest(link)
 	if err != nil {
 		return nil, err
 	}
@@ -128,6 +125,42 @@ func (p *Portal) httpRequest(link string) ([]byte, error) {
 	}
 
 	return contents, nil
+}
+
+func (p *Portal) doHTTPRequest(link string) (*http.Response, error) {
+	req, err := http.NewRequest("GET", link, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("User-Agent", p.UserAgent())
+	req.Header.Set("X-User-Agent", "Model: "+p.Model+"; Link: Ethernet")
+	req.Header.Set("Authorization", "Bearer "+p.Token)
+	req.Header.Set("SN", p.SerialNumber)
+
+	cookieText := "PHPSESSID=null; sn=" + url.QueryEscape(p.SerialNumber) + "; mac=" + url.QueryEscape(p.MAC) + "; stb_lang=en; timezone=" + url.QueryEscape(p.TimeZone) + ";"
+
+	req.Header.Set("Cookie", cookieText)
+
+	resp, err := httpRedirectClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode < 300 || resp.StatusCode >= 400 {
+		return resp, nil
+	}
+
+	defer resp.Body.Close()
+	linkURL, err := url.Parse(link)
+	if err != nil {
+		return nil, err
+	}
+	redirectURL, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		return nil, err
+	}
+	return p.doHTTPRequest(linkURL.ResolveReference(redirectURL).String())
 }
 
 // watchdogUpdate performs a watchdog update request. init should be true only

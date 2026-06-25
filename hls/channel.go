@@ -150,6 +150,8 @@ func (c *Channel) isValid() bool {
 		return time.Since(c.lastAccess).Seconds() <= 30
 	}
 
-	// 5 seconds for everything else
-	return time.Since(c.lastAccess).Seconds() <= 5
+	// 30 seconds for everything else - gives the player enough headroom to
+	// start playback (initial buffering, slow upstream) before we treat the
+	// link as stale and force a fresh create_link call.
+	return time.Since(c.lastAccess).Seconds() <= 30
 }

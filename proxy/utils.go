@@ -13,6 +13,16 @@ import (
 // persistent connection — this is critical for getting priority service from the
 // portal (new connections per request are treated as low-priority/fresh clients).
 var httpClient = &http.Client{
+	// Don't auto-follow redirects: Go's default client strips Authorization
+	// and Cookie headers whenever a redirect crosses to a different host
+	// (e.g. portal -> CDN), which silently breaks multi-hop redirect chains.
+	// Instead, pass the 3xx straight through to the real STB (requestHandler
+	// already forwards status+headers verbatim) so the STB follows the
+	// redirect itself with its own headers on each hop, same as it would
+	// talking directly to the real portal.
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
 	Transport: &http.Transport{
 		DisableCompression:    true,
 		MaxIdleConns:          12,
