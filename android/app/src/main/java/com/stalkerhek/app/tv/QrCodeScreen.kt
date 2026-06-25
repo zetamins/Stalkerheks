@@ -1,6 +1,8 @@
 package com.stalkerhek.app.tv
 
+import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -16,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -27,7 +30,8 @@ import com.stalkerhek.app.util.getLocalIpAddress
 import kotlinx.coroutines.delay
 
 @Composable
-fun QrCodeScreen(onOpenDashboard: () -> Unit) {
+fun QrCodeScreen() {
+    val context = LocalContext.current
     val profile by EngineController.activeProfile.collectAsState()
     val profiles by EngineController.profiles.collectAsState()
     val localIp = remember { getLocalIpAddress() }
@@ -152,11 +156,17 @@ fun QrCodeScreen(onOpenDashboard: () -> Unit) {
 
         Spacer(Modifier.height(16.dp))
 
-        // Open Dashboard button — loads the dashboard locally via the
-        // in-app WebView (127.0.0.1), so managing profiles on this device
-        // is always fast. The QR code above is for other devices.
+        // Open Dashboard button — launches the device's default browser
+        // at 127.0.0.1 (loopback), not the LAN IP, so managing profiles on
+        // this device is always fast: the dashboard server runs in this
+        // same process via JNI, and loopback never round-trips through the
+        // Wi-Fi router (unlike the LAN IP shown in the QR code above,
+        // which is for *other* devices to scan).
         Button(
-            onClick = onOpenDashboard,
+            onClick = {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("http://127.0.0.1:8080/"))
+                context.startActivity(intent)
+            },
             colors = ButtonDefaults.buttonColors(
                 containerColor = Color(0xFF2D8A4E),
                 contentColor = Color.White
