@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.core.content.ContextCompat
 import com.stalkerhek.app.engine.EngineController
 import com.stalkerhek.app.engine.EngineState
+import com.stalkerhek.app.tv.DashboardWebView
 import com.stalkerhek.app.tv.QrCodeScreen
 import kotlinx.coroutines.delay
 
@@ -70,6 +71,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun StalkerApp() {
     val state by EngineController.engineState.collectAsState()
+    var showDashboard by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -82,7 +84,11 @@ fun StalkerApp() {
                 LoadingScreen()
             }
             is EngineState.Ready -> {
-                QrCodeScreen()
+                if (showDashboard) {
+                    DashboardWebView(onBack = { showDashboard = false })
+                } else {
+                    QrCodeScreen(onOpenDashboard = { showDashboard = true })
+                }
             }
             is EngineState.Error -> {
                 val error = (state as EngineState.Error).message

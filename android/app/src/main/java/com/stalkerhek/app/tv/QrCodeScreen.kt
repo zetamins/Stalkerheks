@@ -27,7 +27,7 @@ import com.stalkerhek.app.util.getLocalIpAddress
 import kotlinx.coroutines.delay
 
 @Composable
-fun QrCodeScreen() {
+fun QrCodeScreen(onOpenDashboard: () -> Unit) {
     val profile by EngineController.activeProfile.collectAsState()
     val profiles by EngineController.profiles.collectAsState()
     val localIp = remember { getLocalIpAddress() }
@@ -150,7 +150,28 @@ fun QrCodeScreen() {
             }
         }
 
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(16.dp))
+
+        // Open Dashboard button — loads the dashboard locally via the
+        // in-app WebView (127.0.0.1), so managing profiles on this device
+        // is always fast. The QR code above is for other devices.
+        Button(
+            onClick = onOpenDashboard,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF2D8A4E),
+                contentColor = Color.White
+            ),
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.fillMaxWidth().height(48.dp)
+        ) {
+            Text(
+                "Open Dashboard",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
 
         // Restart Engine button
         Button(
