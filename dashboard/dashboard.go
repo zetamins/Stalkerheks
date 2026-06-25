@@ -166,7 +166,8 @@ func Start(dir string, bind string, s *db.Store) {
 
 func serveDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(dashboardHTML))
+	html := strings.Replace(dashboardHTML, "/*__QRCODE_JS__*/", qrcodeJS, 1)
+	w.Write([]byte(html))
 }
 
 func handleProfiles(w http.ResponseWriter, r *http.Request) {

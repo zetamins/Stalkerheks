@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/erkexzcx/stalkerhek/stalker"
 )
@@ -337,17 +338,23 @@ func requestHandler(w http.ResponseWriter, r *http.Request) {
 	// Serialize requests per STB (by client IP) to avoid Cloudflare 520 errors
 	// from concurrent bursts, while allowing different STBs to proceed in parallel.
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	queuedAt := time.Now()
 	lockSTB(clientIP)
+	waited := time.Since(queuedAt)
 	defer unlockSTB(clientIP)
 
+	sentAt := time.Now()
 	resp, err := getRequestWithRetry(finalLink, r)
 	if err != nil {
-		log.Printf("ERROR forwarding %s: %v", tagAction, err)
+		log.Printf("ERROR forwarding %s after %v: %v", tagAction, time.Since(sentAt).Round(time.Millisecond), err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
-	log.Printf("  -> %s status=%d size=%d", tagAction, resp.StatusCode, resp.ContentLength)
+	// queue = time spent serialized behind this STB's other in-flight
+	// requests; upstream = time the real portal took to respond. Either being
+	// large is what makes the portal feel slow to load.
+	log.Printf("  -> %s status=%d size=%d queue=%v upstream=%v", tagAction, resp.StatusCode, resp.ContentLength, waited.Round(time.Millisecond), time.Since(sentAt).Round(time.Millisecond))
 
 	// Read response body so we can optionally modify it
 	bodyBytes, err := ioutil.ReadAll(resp.Body)

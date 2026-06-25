@@ -5,10 +5,21 @@ const dashboardHTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="preload" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" as="style" referrerpolicy="no-referrer" onload="this.onload=null;this.rel='stylesheet'">
-<noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"></noscript>
 <title>Stalkerhek Dashboard</title>
 <style>
+/* Offline icons — replaces external Font Awesome so the dashboard never blocks on the internet. */
+.fa-solid{font-style:normal;display:inline-block;line-height:1;font-family:inherit}
+.fa-qrcode::before{content:"\25A6"}
+.fa-server::before{content:"\1F5A7"}
+.fa-file-lines::before{content:"\1F4C4"}
+.fa-plus::before{content:"\FF0B"}
+.fa-tv::before{content:"\1F4FA"}
+.fa-play::before{content:"\25B6"}
+.fa-gauge::before{content:"\1F39B"}
+.fa-stop::before{content:"\25A0"}
+.fa-link::before{content:"\1F517"}
+.fa-pen-to-square::before{content:"\270E"}
+.fa-trash::before{content:"\1F5D1"}
 :root{--bg:#0a0f0a;--panel:#0d1410;--panel2:#111815;--border:#1f2e23;--text:#e0e6e0;--muted:#9aaa9a;--brand:#2d7a4e;--brand-hover:#3a8f5e;--ok:#3fb970;--warn:#d4a94a;--bad:#e85d4d}
 *{box-sizing:border-box}
 body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Helvetica,Arial,sans-serif;background:linear-gradient(180deg,#0d1410 0%,#0a0f0a 100%);color:var(--text);min-height:100dvh}
@@ -64,6 +75,7 @@ a{color:var(--brand);text-decoration:none}a:hover{color:var(--brand-hover);text-
 @media(max-width:768px){.grid{grid-template-columns:1fr}.form-row{grid-template-columns:1fr}.topbar{flex-direction:column;align-items:flex-start}}
 @media(min-width:1920px){.wrap{max-width:1600px;gap:28px}.topbar{padding:22px 32px;border-radius:18px}.topbar .logo{font-size:28px}.tab{padding:14px 26px;font-size:17px;border-radius:12px}.btn{padding:14px 26px;font-size:17px;border-radius:12px}.card{padding:28px;border-radius:18px}.card-title{font-size:22px}.card-subtitle{font-size:17px}.card-info{font-size:16px}.status{padding:6px 16px;font-size:16px}.port-tag{font-size:14px}.btn-sm{padding:10px 18px;font-size:16px}.form-group label{font-size:16px}.form-group input{padding:14px 18px;font-size:17px;border-radius:12px}.log-viewer{font-size:15px;max-height:500px}.connect-grid{flex-direction:row!important;justify-content:center!important;gap:60px!important}.connect-card{padding:40px!important}.connect-qr{width:320px!important;height:320px!important}.connect-url{padding:16px!important;font-size:18px!important}.connect-url code{font-size:20px!important}}
 </style>
+<script>/*__QRCODE_JS__*/</script>
 </head>
 <body>
 <div class="wrap">
@@ -95,7 +107,7 @@ async function showConnect(){
   const proxyURL='http://'+host+':'+proxyPort+'/c/';
   const hlsURL='http://'+host+':'+hlsPort+'/iptv/';
   const dashURL='http://'+host+':'+dashPort+'/';
-  const qrURL='https://api.qrserver.com/v1/create-qr-code/?size=200x200&data='+encodeURIComponent(dashURL);
+  const qrURL=makeQR(dashURL);
   document.getElementById('content').className='';
   document.getElementById('content').innerHTML=
     '<div class="card connect-card" style="text-align:center;grid-column:1/-1;padding:32px 20px">'+
@@ -162,6 +174,7 @@ function showModal(title,body,onSave){document.getElementById('modal-container')
 function closeModal(){document.getElementById('modal-container').innerHTML=''}
 function toast(msg,type){type=type||'success';const el=document.createElement('div');el.className='toast toast-'+type;el.textContent=msg;document.getElementById('toast-container').appendChild(el);setTimeout(()=>el.remove(),2500)}
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function makeQR(text){try{var q=qrcode(0,'M');q.addData(text);q.make();return q.createDataURL(6,4)}catch(e){return''}}
 loadProfiles();setInterval(()=>{if(currentTab==='profiles')loadProfiles()},10000)
 </script>
 </body>

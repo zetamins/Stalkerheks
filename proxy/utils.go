@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -24,12 +25,33 @@ var httpClient = &http.Client{
 		return http.ErrUseLastResponse
 	},
 	Transport: &http.Transport{
-		DisableCompression:    true,
+		// Let the transport negotiate gzip itself. getRequest always strips the
+		// STB's own Accept-Encoding, so the only compressed responses we ever
+		// get are ones Go asked for — and Go decompresses those transparently
+		// before we read the body, so every response-body rewrite still
+		// operates on plaintext. Compressing the wire transfer is the single
+		// biggest win for the large get_all_channels / EPG responses on a slow
+		// link, which were previously pulled down uncompressed.
+		DisableCompression: false,
+		// Bound connection setup. Without an explicit dial/TLS timeout a
+		// dead-or-slow upstream connection hangs until the OS TCP timeout
+		// (which can be minutes) — to the STB this looks like the request
+		// never returns, then suddenly does. Failing fast lets
+		// getRequestWithRetry back off and retry instead. We deliberately do
+		// NOT set http.Client.Timeout: that caps the whole request including
+		// body read, which would sever the long-lived VOD/HLS streams copied
+		// through this same client.
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
 		MaxIdleConns:          12,
 		MaxIdleConnsPerHost:   6,
 		MaxConnsPerHost:       6, // Match Qt WebKit default — prevents account connection limit errors
 		IdleConnTimeout:       120 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
 	},
 }
 
