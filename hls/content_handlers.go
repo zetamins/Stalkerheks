@@ -17,8 +17,9 @@ func (inst *Instance) handleContent(cr *ContentRequest) {
 		return
 	}
 
-	// Snapshot channel value so we can release the lock
-	cr.Channel = *cr.ChannelRef
+	// Snapshot channel pointer so we can release the lock without copying
+	// sync.Once (which is illegal — go vet warns about noCopy).
+	cr.Channel = cr.ChannelRef
 	cr.ChannelRef.Mux.Unlock()
 
 	switch linkType {

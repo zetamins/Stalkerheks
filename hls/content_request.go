@@ -16,7 +16,9 @@ type ContentRequest struct {
 	Suffix     string
 	ChannelRef *Channel
 
-	Channel Channel
+	// Snapshot of ChannelRef after the lock is released — pointer to avoid
+	// copying sync.Once (sync.noCopy).
+	Channel *Channel
 }
 
 // getContentRequest parses an incoming HLS/logo request and resolves the
