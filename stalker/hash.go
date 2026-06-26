@@ -38,12 +38,6 @@ func hashVersion1(data1, data2 string) string {
 	return sha1Hex(h2 + data2)
 }
 
-// VersionString builds a synthetic firmware version string matching the
-// format real MAG STB boxes report in the "ver" get_profile parameter.
-func (p *Portal) VersionString() string {
-	return "ImageDescription: " + p.Model + "; ImageDate: 20010101_000000; PORTAL version: 5.6.0; API Version: 0x1811"
-}
-
 // Metrics builds the JSON metrics blob real STBs send: mac, sn, model,
 // type and a persistent device uid.
 func (p *Portal) Metrics() string {

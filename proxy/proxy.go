@@ -235,10 +235,10 @@ func (inst *Instance) requestHandler(w http.ResponseWriter, r *http.Request) {
 		query["ver"] = []string{inst.buildVersion()}
 	}
 	if _, exists := query["image_version"]; exists {
-		query["image_version"] = []string{"0x00000015"}
+		query["image_version"] = []string{stalker.FirmwareImageVersion()}
 	}
 	if _, exists := query["hw_version"]; exists {
-		query["hw_version"] = []string{"1.0.00"}
+		query["hw_version"] = []string{stalker.FirmwareHWVersion()}
 	}
 	if _, exists := query["metrics"]; exists {
 		query["metrics"] = []string{inst.buildMetrics()}
@@ -259,7 +259,7 @@ func (inst *Instance) requestHandler(w http.ResponseWriter, r *http.Request) {
 		query["hw_version_2"] = []string{inst.buildHWVersion2()}
 	}
 	if _, exists := query["api_signature"]; exists {
-		query["api_signature"] = []string{"256"}
+		query["api_signature"] = []string{stalker.FirmwareAPISignature()}
 	}
 	if _, exists := query["prehash"]; exists {
 		query["prehash"] = []string{inst.buildPrehash()}

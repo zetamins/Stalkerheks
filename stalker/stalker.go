@@ -46,10 +46,10 @@ func (p *Portal) Start() error {
 	if err := p.getProfile(); err != nil {
 		log.Println("get_profile failed (continuing anyway):", err)
 	}
-	if err := p.getLocalization(); err != nil {
+	if _, err := p.getLocalization(); err != nil {
 		log.Println("get_localization failed (continuing anyway):", err)
 	}
-	if err := p.getModules(); err != nil {
+	if _, err := p.getModules(); err != nil {
 		log.Println("get_modules failed (continuing anyway):", err)
 	}
 

@@ -27,13 +27,13 @@ func (p *Portal) getProfile() error {
 	params.Set("num_banks", "1")
 	params.Set("sn", p.SerialNumber)
 	params.Set("stb_type", p.Model)
-	params.Set("image_version", "0x00000015")
+	params.Set("image_version", FirmwareImageVersion())
 	params.Set("video_out", "hdmi")
 	params.Set("device_id", p.DeviceID)
 	params.Set("device_id2", p.DeviceID2)
 	params.Set("signature", p.signature())
 	params.Set("auth_second_step", "0") // Real STB sends 0 on initial boot, 1 only after portal auth dialog (xpcom.common.js:914-929)
-	params.Set("hw_version", "1.0.00")
+	params.Set("hw_version", FirmwareHWVersion())
 	params.Set("not_valid_token", "0")
 	// The real MAG STB sends exactly 14 params (plus JsHttpRequest).
 	// client_type, metrics, hw_version_2, api_signature, prehash, timestamp
@@ -66,15 +66,48 @@ func (p *Portal) getProfile() error {
 	return nil
 }
 
-// getLocalization and getModules mirror two more calls real STBs make during
-// boot, right after get_profile and before listing channels. Non-fatal: not
-// every portal deployment requires them.
-func (p *Portal) getLocalization() error {
-	_, err := p.httpRequest(p.Location + "?type=stb&action=get_localization&JsHttpRequest=1-xml")
-	return err
+// getLocalization retrieves the full localization map from the portal.
+// Real STBs use this to populate UI strings for the current locale.
+func (p *Portal) getLocalization() (map[string]string, error) {
+	type tmpStruct struct {
+		Js map[string]string `json:"js"`
+	}
+	var tmp tmpStruct
+	content, err := p.httpRequest(p.Location + "?type=stb&action=get_localization&JsHttpRequest=1-xml")
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(content, &tmp); err != nil {
+		return nil, err
+	}
+	return tmp.Js, nil
 }
 
-func (p *Portal) getModules() error {
-	_, err := p.httpRequest(p.Location + "?type=stb&action=get_modules&JsHttpRequest=1-xml")
-	return err
+// ModuleInfo describes a single portal module as returned by get_modules.
+type ModuleInfo struct {
+	Name     string `json:"name"`
+	Enabled  bool   `json:"enabled"`
+	Switched bool   `json:"switched"`
+}
+
+// getModules retrieves the module configuration from the portal.
+// Real STBs use this to determine which UI features to show.
+func (p *Portal) getModules() ([]ModuleInfo, error) {
+	type tmpStruct struct {
+		Js struct {
+			AllModules        []ModuleInfo `json:"all_modules"`
+			SwitchableModules []string     `json:"switchable_modules"`
+			DisabledModules   []string     `json:"disabled_modules"`
+			RestrictedModules []string     `json:"restricted_modules"`
+		} `json:"js"`
+	}
+	var tmp tmpStruct
+	content, err := p.httpRequest(p.Location + "?type=stb&action=get_modules&JsHttpRequest=1-xml")
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(content, &tmp); err != nil {
+		return nil, err
+	}
+	return tmp.Js.AllModules, nil
 }

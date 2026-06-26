@@ -7,6 +7,29 @@ import (
 	"strconv"
 )
 
+// EPGSimpleRecord is the typed response from the portal's
+// get_simple_data_table action, replacing the previous
+// map[string]interface{} stub.
+type EPGSimpleRecord struct {
+	CurPage       int                `json:"cur_page"`
+	TotalItems    int                `json:"total_items"`
+	MaxPageItems  int                `json:"max_page_items"`
+	SelectedItem  int                `json:"selected_item"`
+	Data          []EPGSimpleProgram `json:"data"`
+}
+
+// EPGSimpleProgram is a single program entry in the simple EPG view.
+type EPGSimpleProgram struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	StartTimestamp string `json:"start_timestamp"`
+	StopTimestamp  string `json:"stop_timestamp"`
+	StartTime      string `json:"t_time"`
+	StopTime       string `json:"t_time_to"`
+	Descr          string `json:"descr"`
+	MarkArchive    string `json:"mark_archive"`
+}
+
 // GetEPGInfo retrieves now/next EPG data for all user channels within the given
 // period (hours). Default period is 3 hours if <= 0.
 func (p *Portal) GetEPGInfo(period int) (map[string][]EPGEntry, error) {
@@ -142,8 +165,9 @@ func (p *Portal) GetEPGTable(chID string, fromTS, toTS int64) (*EPGRecord, error
 }
 
 // GetSimpleDataTable retrieves paginated EPG data for a single channel on a
-// given date (format: Y-m-d).
-func (p *Portal) GetSimpleDataTable(chID, date string, page int) (map[string]interface{}, error) {
+// given date (format: Y-m-d). Returns the typed EPGSimpleRecord instead of
+// the previous map[string]interface{} stub.
+func (p *Portal) GetSimpleDataTable(chID, date string, page int) (*EPGSimpleRecord, error) {
 	params := url.Values{}
 	params.Set("type", "epg")
 	params.Set("action", "get_simple_data_table")
@@ -159,9 +183,12 @@ func (p *Portal) GetSimpleDataTable(chID, date string, page int) (map[string]int
 		return nil, err
 	}
 
-	var result map[string]interface{}
-	if err := json.Unmarshal(content, &result); err != nil {
+	type tmpStruct struct {
+		Js EPGSimpleRecord `json:"js"`
+	}
+	var tmp tmpStruct
+	if err := json.Unmarshal(content, &tmp); err != nil {
 		return nil, err
 	}
-	return result, nil
+	return &tmp.Js, nil
 }

@@ -10,13 +10,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/erkexzcx/stalkerhek/stalker"
 )
 
 // buildDeviceHash computes the X-Hash header value sent on media/CDN requests.
-// Format: SHA-1(model + version_string[:56]), matching real MAG STB behavior.
+// Uses real firmware build date from Resources/rootfs-2.20.11-pub-544.
 func buildDeviceHash(model string) string {
 	h := sha1.New()
-	h.Write([]byte(model + "ImageDescription: " + model + "; ImageDate: 20010101_000000; PORTAL version: 5.6.0; API Version: 0x1811"))
+	h.Write([]byte(stalker.CDNHashInput(model)))
 	return hex.EncodeToString(h.Sum(nil))
 }
 
