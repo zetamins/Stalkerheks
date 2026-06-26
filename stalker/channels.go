@@ -59,7 +59,9 @@ func (c *Channel) NewLink(retry bool) (string, error) {
 
 func isTransientCreateLinkError(err error) bool {
 	msg := err.Error()
-	return strings.Contains(msg, "limit") || strings.Contains(msg, "temporary_unavailable")
+	// Real STB treats "limit" as FATAL (shows notice, does not retry).
+	// Only "temporary_unavailable" is retried on create_link level.
+	return strings.Contains(msg, "temporary_unavailable")
 }
 
 func (c *Channel) newLinkOnce() (string, error) {
@@ -71,7 +73,7 @@ func (c *Channel) newLinkOnce() (string, error) {
 	}
 	var tmp tmpStruct
 
-	link := c.Portal.Location + "?action=create_link&type=itv&cmd=" + url.PathEscape(c.CMD) + "&JsHttpRequest=1-xml"
+	link := c.Portal.Location + "?action=create_link&type=itv&cmd=" + url.PathEscape(c.CMD) + "&series=&forced_storage=&disable_ad=0&download=0&JsHttpRequest=1-xml"
 	content, err := c.Portal.httpRequest(link)
 	if err != nil {
 		return "", err
@@ -290,7 +292,7 @@ func (c *RadioChannel) newLinkOnce() (string, error) {
 	}
 	var tmp tmpStruct
 
-	link := c.Portal.Location + "?action=create_link&type=radio&cmd=" + url.PathEscape(c.CMD) + "&JsHttpRequest=1-xml"
+	link := c.Portal.Location + "?action=create_link&type=radio&cmd=" + url.PathEscape(c.CMD) + "&series=&forced_storage=&disable_ad=0&download=0&JsHttpRequest=1-xml"
 	content, err := c.Portal.httpRequest(link)
 	if err != nil {
 		return "", err
@@ -411,11 +413,15 @@ func (p *Portal) NewVODLink(cmd, series, forcedStorage string) (string, error) {
 	link := p.Location + "?action=create_link&type=vod&cmd=" + url.PathEscape(cmd)
 	if series != "" {
 		link += "&series=" + url.PathEscape(series)
+	} else {
+		link += "&series="
 	}
 	if forcedStorage != "" {
 		link += "&forced_storage=" + url.PathEscape(forcedStorage)
+	} else {
+		link += "&forced_storage="
 	}
-	link += "&JsHttpRequest=1-xml"
+	link += "&disable_ad=0&download=0&JsHttpRequest=1-xml"
 
 	content, err := p.httpRequest(link)
 	if err != nil {
@@ -483,7 +489,7 @@ func (p *Portal) NewKaraokeLink(cmd string) (string, error) {
 	}
 	var tmp tmpStruct
 
-	link := p.Location + "?action=create_link&type=karaoke&cmd=" + url.PathEscape(cmd) + "&JsHttpRequest=1-xml"
+	link := p.Location + "?action=create_link&type=karaoke&cmd=" + url.PathEscape(cmd) + "&series=&forced_storage=&disable_ad=0&download=0&JsHttpRequest=1-xml"
 	content, err := p.httpRequest(link)
 	if err != nil {
 		return "", err

@@ -174,9 +174,10 @@ func (p *Portal) doHTTPRequestFollow(link string, depth int) (*http.Response, er
 	req.Header.Set("User-Agent", p.UserAgent())
 	req.Header.Set("X-User-Agent", "Model: "+p.Model+"; Link: Ethernet")
 	req.Header.Set("Authorization", "Bearer "+p.Token)
-	req.Header.Set("SN", p.SerialNumber)
-
-	cookieText := "PHPSESSID=null; sn=" + url.QueryEscape(p.SerialNumber) + "; mac=" + url.QueryEscape(p.MAC) + "; stb_lang=en; timezone=" + url.QueryEscape(p.TimeZone) + ";"
+	// Real MAG STB does NOT send an SN header — removed to match firmware.
+	// Cookie exactly matches real MAG STB (xpcom.common.js set_cookie):
+	// mac, stb_lang, timezone — no sn, no fabricated PHPSESSID.
+	cookieText := "mac=" + url.QueryEscape(p.MAC) + "; stb_lang=en; timezone=" + url.QueryEscape(p.TimeZone)
 
 	req.Header.Set("Cookie", cookieText)
 

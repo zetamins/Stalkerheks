@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/url"
 	"strconv"
-	"time"
 )
 
 // getProfile sends an STB identity profile to the Stalker portal, mirroring
@@ -28,20 +27,17 @@ func (p *Portal) getProfile() error {
 	params.Set("num_banks", "1")
 	params.Set("sn", p.SerialNumber)
 	params.Set("stb_type", p.Model)
-	params.Set("client_type", "STB")
 	params.Set("image_version", "0x00000015")
 	params.Set("video_out", "hdmi")
 	params.Set("device_id", p.DeviceID)
 	params.Set("device_id2", p.DeviceID2)
 	params.Set("signature", p.signature())
-	params.Set("auth_second_step", "1")
+	params.Set("auth_second_step", "0") // Real STB sends 0 on initial boot, 1 only after portal auth dialog (xpcom.common.js:914-929)
 	params.Set("hw_version", "1.0.00")
 	params.Set("not_valid_token", "0")
-	params.Set("metrics", p.Metrics())
-	params.Set("hw_version_2", p.HWVersion2())
-	params.Set("api_signature", "256")
-	params.Set("prehash", p.Prehash())
-	params.Set("timestamp", strconv.FormatInt(time.Now().Unix(), 10))
+	// The real MAG STB sends exactly 14 params (plus JsHttpRequest).
+	// client_type, metrics, hw_version_2, api_signature, prehash, timestamp
+	// are NOT sent by real firmware — removed to match xpcom.common.js exactly.
 	params.Set("JsHttpRequest", "1-xml")
 
 	body, err := p.httpRequest(p.Location + "?" + params.Encode())

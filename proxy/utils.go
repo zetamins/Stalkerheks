@@ -44,7 +44,7 @@ func getRequest(link string, originalRequest *http.Request, config *stalker.Conf
 		case "Authorization":
 			req.Header.Set("Authorization", "Bearer "+config.Portal.Token)
 		case "Cookie":
-			cookieText := "PHPSESSID=null; sn=" + url.QueryEscape(config.Portal.SerialNumber) + "; mac=" + url.QueryEscape(config.Portal.MAC) + "; stb_lang=en; timezone=" + url.QueryEscape(config.Portal.TimeZone) + ";"
+			cookieText := "mac=" + url.QueryEscape(config.Portal.MAC) + "; stb_lang=en; timezone=" + url.QueryEscape(config.Portal.TimeZone)
 			req.Header.Set("Cookie", cookieText)
 		case "User-Agent":
 			req.Header.Set("User-Agent", config.Portal.UserAgent())

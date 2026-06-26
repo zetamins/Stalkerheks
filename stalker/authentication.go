@@ -35,15 +35,15 @@ func (p *Portal) handshake() error {
 	}
 	var tmp tmpStruct
 
-	req, err := http.NewRequest("GET", p.Location+"?type=stb&action=handshake&prehash=0&token="+p.Token+"&JsHttpRequest=1-xml", nil)
+	req, err := http.NewRequest("GET", p.Location+"?type=stb&action=handshake&token="+p.Token+"&JsHttpRequest=1-xml", nil)
 	if err != nil {
 		return err
 	}
 
 	req.Header.Set("User-Agent", p.UserAgent())
 	req.Header.Set("X-User-Agent", "Model: "+p.Model+"; Link: Ethernet")
-	req.Header.Set("SN", p.SerialNumber)
-	req.Header.Set("Cookie", "PHPSESSID=null; sn="+p.SerialNumber+"; mac="+p.MAC+"; stb_lang=en; timezone="+p.TimeZone)
+	// Real MAG STB: no SN header, cookie = mac/stb_lang/timezone only.
+	req.Header.Set("Cookie", "mac="+p.MAC+"; stb_lang=en; timezone="+p.TimeZone)
 
 	resp, err := handshakeClient.Do(req)
 	if err != nil {

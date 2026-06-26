@@ -22,7 +22,7 @@ func (p *Portal) ArchiveLink(cmd, series string) (string, error) {
 	if series != "" {
 		link += "&series=" + url.PathEscape(series)
 	}
-	link += "&JsHttpRequest=1-xml"
+	link += "&forced_storage=&disable_ad=0&download=0&JsHttpRequest=1-xml"
 
 	content, err := p.httpRequest(link)
 	if err != nil {
