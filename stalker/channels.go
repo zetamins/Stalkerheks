@@ -100,7 +100,7 @@ func (c *Channel) newLinkOnce() (string, error) {
 
 	strs := strings.Split(tmp.Js.Cmd, " ")
 	link = strs[len(strs)-1]
-	link = rewriteMACParam(link, c.Portal.MAC)
+	link = rewriteMACParam(link, c.Portal.cdnMAC())
 	return link, nil
 }
 
@@ -313,7 +313,7 @@ func (c *RadioChannel) newLinkOnce() (string, error) {
 
 	strs := strings.Split(tmp.Js.Cmd, " ")
 	link = strs[len(strs)-1]
-	link = rewriteMACParam(link, c.Portal.MAC)
+	link = rewriteMACParam(link, c.Portal.cdnMAC())
 	return link, nil
 }
 
@@ -442,7 +442,7 @@ func (p *Portal) NewVODLink(cmd, series, forcedStorage string) (string, error) {
 	}
 	strs := strings.Split(tmp.Js.Cmd, " ")
 	link = strs[len(strs)-1]
-	link = rewriteMACParam(link, p.MAC)
+	link = rewriteMACParam(link, p.cdnMAC())
 	return link, nil
 }
 
@@ -511,8 +511,20 @@ func (p *Portal) NewKaraokeLink(cmd string) (string, error) {
 	}
 	strs := strings.Split(tmp.Js.Cmd, " ")
 	link = strs[len(strs)-1]
-	link = rewriteMACParam(link, p.MAC)
+	link = rewriteMACParam(link, p.cdnMAC())
 	return link, nil
+}
+
+// cdnMAC returns the MAC to embed in CDN/stream play URLs (the mac= query
+// param). The portal flags the account's real MAC for anti-sharing and returns
+// HTTP 458 on stream requests carrying it, but the play_token isn't bound to
+// the MAC — so a configured alternate (CDNMac) gets the same stream through.
+// Falls back to the auth MAC when unset, preserving the original behavior.
+func (p *Portal) cdnMAC() string {
+	if p.CDNMac != "" {
+		return p.CDNMac
+	}
+	return p.MAC
 }
 
 // rewriteMACParam replaces the mac= query parameter in a URL with the

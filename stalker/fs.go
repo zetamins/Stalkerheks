@@ -36,6 +36,7 @@ type Portal struct {
 	DeviceID2       string
 	Signature       string
 	MAC             string
+	CDNMac          string // mac= embedded in CDN/stream play URLs; bypasses per-MAC 458 anti-sharing. Falls back to MAC when empty. See Portal.cdnMAC.
 	Location        string
 	Location2       string // fallback portal URL; tried if Location is unreachable at Start(), mirroring real STBs' portal1/portal2 failover
 	TimeZone        string
@@ -143,6 +144,7 @@ func LoadProfile(store *db.Store, name string) (*Config, error) {
 			DeviceID2:    p.Portal.DeviceID2,
 			Signature:    p.Portal.Signature,
 			MAC:          p.Portal.MAC,
+			CDNMac:       p.Portal.CDNMac,
 			Location:     p.Portal.URL,
 			Location2:    p.Portal.URL2,
 			TimeZone:     p.Portal.TimeZone,
@@ -184,6 +186,12 @@ func LoadProfile(store *db.Store, name string) (*Config, error) {
 
 func (c *Config) validate() error {
 	c.Portal.MAC = strings.ToUpper(c.Portal.MAC)
+	if c.Portal.CDNMac != "" {
+		c.Portal.CDNMac = strings.ToUpper(c.Portal.CDNMac)
+		if !regexMAC.MatchString(c.Portal.CDNMac) {
+			return errors.New("invalid CDN MAC '" + c.Portal.CDNMac + "'")
+		}
+	}
 
 	if c.Portal.Model == "" {
 		return errors.New("empty model")

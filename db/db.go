@@ -20,7 +20,16 @@ type PortalConfig struct {
 	DeviceID2    string `json:"device_id2"`
 	Signature    string `json:"signature"`
 	MAC          string `json:"mac"`
-	URL          string `json:"url"`
+
+	// CDNMac, when set, is the MAC embedded in the mac= query parameter of
+	// CDN/stream play URLs (live.php etc.) — distinct from MAC, which is used
+	// for portal auth. The portal flags the account's real MAC for
+	// anti-sharing and returns HTTP 458 on stream requests carrying it, but
+	// the play_token is not bound to the MAC, so a different CDNMac gets the
+	// same stream through. Leave empty to use MAC (original behavior).
+	CDNMac string `json:"cdn_mac,omitempty"`
+
+	URL string `json:"url"`
 	URL2         string `json:"url2,omitempty"` // fallback portal URL (real STBs are provisioned with portal1/portal2 and fail over)
 	TimeZone     string `json:"time_zone"`
 	Token        string `json:"token"`
