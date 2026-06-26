@@ -41,7 +41,10 @@ func (inst *Instance) handleContentUnknown(cr *ContentRequest) {
 	// instead of retrying the same URL.
 	var resp *http.Response
 	var err error
-	backoffs := []time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second, 3 * time.Second, 4 * time.Second}
+	// Keep total retry time bounded so first-byte stays under typical player
+	// connect timeouts. Each retry re-mints a fresh play_token (and a fresh
+	// CDN edge), which is what actually clears a 458 or a per-edge 509.
+	backoffs := []time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second}
 	for attempt := 0; attempt <= len(backoffs); attempt++ {
 		if attempt > 0 {
 			// Get a fresh CDN URL with new play_token from the portal
@@ -75,13 +78,23 @@ func (inst *Instance) handleContentUnknown(cr *ContentRequest) {
 
 	cr.ChannelRef.LinkType = getLinkType(resp.Header.Get("Content-Type"))
 
+	// Stream the response we just fetched, instead of closing it and
+	// re-fetching the same link. The old path resolved the play URL twice per
+	// request (once to detect the type, once to stream), which doubled
+	// time-to-first-byte and added a second failure point. cr.Channel is the
+	// snapshot the streaming helpers read after the lock is released.
+	cr.Channel = cr.ChannelRef
 	if cr.ChannelRef.LinkType == linkTypeHLS {
 		cr.ChannelRef.HLSLink = resp.Request.URL.String()
 		cr.ChannelRef.HLSLinkRoot = deleteAfterLastSlash(cr.ChannelRef.HLSLink)
 		cr.ChannelRef.startKeepAlive()
+		link := cr.ChannelRef.HLSLink
+		cr.ChannelRef.Mux.Unlock()
+		inst.handleEstablishedContentHLS(cr, resp, link)
+		return
 	}
-
-	inst.handleContent(cr)
+	cr.ChannelRef.Mux.Unlock()
+	inst.handleEstablishedContentMedia(cr, resp)
 }
 
 func (inst *Instance) handleContentHLS(cr *ContentRequest) {
@@ -103,15 +116,15 @@ func (inst *Instance) handleContentHLS(cr *ContentRequest) {
 	inst.handleEstablishedContentHLS(cr, resp, link)
 }
 
-// retryingFetch fetches a CDN/stream link, retrying transient upstream
-// failures — HTTP 458 ("device not prioritized") and 5xx server/CDN errors
-// (500, 502, 503, 509, 520, …) — with a short backoff. It reuses the same
-// link: the play_token stays valid across a transient server hiccup, and the
-// unknown-type resolver (handleContentUnknown) is what re-mints links when a
-// fresh token is actually needed. Fatal errors (4xx, connection failures)
-// return immediately.
+// retryingFetch fetches a cached/known CDN link, retrying only a transient
+// gateway hiccup (500/502/503/504) with a short backoff. It reuses the same
+// fixed link, so the failures a same-link retry can't fix — 458 (needs a fresh
+// play_token) and 509 (a per-edge bandwidth cap) — are surfaced immediately
+// rather than burning the player's timeout; those are handled by re-resolution
+// in handleContentUnknown. Other errors (4xx, connection failures) also return
+// immediately.
 func retryingFetch(inst *Instance, link string) (*http.Response, error) {
-	backoffs := []time.Duration{300 * time.Millisecond, 1 * time.Second, 2 * time.Second}
+	backoffs := []time.Duration{300 * time.Millisecond, 800 * time.Millisecond}
 	var resp *http.Response
 	var err error
 	for attempt := 0; attempt <= len(backoffs); attempt++ {
@@ -120,13 +133,23 @@ func retryingFetch(inst *Instance, link string) (*http.Response, error) {
 			return resp, nil
 		}
 		var se *httpStatusError
-		if errors.As(err, &se) && (se.code == 458 || se.code >= 500) && attempt < len(backoffs) {
+		if errors.As(err, &se) && isTransientGateway(se.code) && attempt < len(backoffs) {
 			time.Sleep(backoffs[attempt])
 			continue
 		}
 		return nil, err
 	}
 	return resp, err
+}
+
+// isTransientGateway reports whether a status is a transient gateway/server
+// error that a retry against the same URL can plausibly clear.
+func isTransientGateway(code int) bool {
+	switch code {
+	case 500, 502, 503, 504:
+		return true
+	}
+	return false
 }
 
 func (inst *Instance) handleEstablishedContentHLS(cr *ContentRequest, resp *http.Response, link string) {
