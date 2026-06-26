@@ -107,7 +107,7 @@ func (c *Channel) Logo() string {
 	if c.LogoLink == "" {
 		return ""
 	}
-	return c.Portal.Location + "misc/logos/320/" + c.LogoLink // hardcoded path - fixme?
+	return strings.TrimRight(c.Portal.Location, "/") + "/misc/logos/320/" + c.LogoLink
 }
 
 // Genre returns a genre title

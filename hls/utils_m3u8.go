@@ -27,6 +27,12 @@ func rewriteLinks(rbody *io.ReadCloser, prefix, linkRoot string) string {
 		var l string
 
 		switch {
+		case strings.HasPrefix(link, "http://") || strings.HasPrefix(link, "https://"):
+			// Absolute URL: resolve against linkRootURL, strip the
+			// linkRoot prefix to get the relative path.
+			absURL, _ := url.Parse(link)
+			resolved := linkRootURL.ResolveReference(absURL).String()
+			l = strings.ReplaceAll(resolved, linkRoot, "")
 		case strings.HasPrefix(link, "//"):
 			tmpURL, _ := url.Parse(link)
 			tmp2URL, _ := url.Parse(tmpURL.RequestURI())
