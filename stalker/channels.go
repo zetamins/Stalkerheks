@@ -99,7 +99,9 @@ func (c *Channel) newLinkOnce() (string, error) {
 	}
 
 	strs := strings.Split(tmp.Js.Cmd, " ")
-	return strs[len(strs)-1], nil
+	link = strs[len(strs)-1]
+	link = rewriteMACParam(link, c.Portal.MAC)
+	return link, nil
 }
 
 // Logo returns full link to channel's logo
@@ -310,7 +312,9 @@ func (c *RadioChannel) newLinkOnce() (string, error) {
 	}
 
 	strs := strings.Split(tmp.Js.Cmd, " ")
-	return strs[len(strs)-1], nil
+	link = strs[len(strs)-1]
+	link = rewriteMACParam(link, c.Portal.MAC)
+	return link, nil
 }
 
 // ####################################################
@@ -437,7 +441,9 @@ func (p *Portal) NewVODLink(cmd, series, forcedStorage string) (string, error) {
 		return "", errors.New("vod create_link returned empty command")
 	}
 	strs := strings.Split(tmp.Js.Cmd, " ")
-	return strs[len(strs)-1], nil
+	link = strs[len(strs)-1]
+	link = rewriteMACParam(link, p.MAC)
+	return link, nil
 }
 
 // ####################################################
@@ -504,5 +510,28 @@ func (p *Portal) NewKaraokeLink(cmd string) (string, error) {
 		return "", errors.New("karaoke create_link returned empty command")
 	}
 	strs := strings.Split(tmp.Js.Cmd, " ")
-	return strs[len(strs)-1], nil
+	link = strs[len(strs)-1]
+	link = rewriteMACParam(link, p.MAC)
+	return link, nil
+}
+
+// rewriteMACParam replaces the mac= query parameter in a URL with the
+// configured device MAC. The real portal embeds its own registered MAC
+// in stream URLs; the CDN checks this against the streaming session.
+func rewriteMACParam(link, newMAC string) string {
+	if newMAC == "" || !strings.Contains(link, "mac=") {
+		return link
+	}
+	// Find mac= parameter and replace its value
+	idx := strings.Index(link, "mac=")
+	if idx < 0 {
+		return link
+	}
+	start := idx + 4
+	end := strings.IndexAny(link[start:], "& ")
+	if end < 0 {
+		// mac= is the last parameter
+		return link[:start] + newMAC
+	}
+	return link[:start] + newMAC + link[start+end:]
 }
