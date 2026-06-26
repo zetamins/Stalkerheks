@@ -47,6 +47,18 @@ var httpClient = &http.Client{
 
 const maxRedirects = 10
 
+// httpStatusError carries the HTTP status code of a non-success upstream
+// response so callers (e.g. the 458 "device not prioritized" retry loop) can
+// branch on the specific code rather than treating every failure the same.
+type httpStatusError struct {
+	link string
+	code int
+}
+
+func (e *httpStatusError) Error() string {
+	return e.link + " returned HTTP code " + strconv.Itoa(e.code)
+}
+
 // responseWithUA fetches a URL with the given headers. Used for both HLS content
 // and logo downloads.
 func responseWithUA(link, userAgent, mac, model, hash, serial string) (*http.Response, error) {
@@ -96,7 +108,7 @@ func responseFollowWithUA(link, userAgent, mac, model, hash, serial string, dept
 		return responseFollowWithUA(newLink.String(), userAgent, mac, model, hash, serial, depth+1)
 	}
 
-	return nil, errors.New(link + " returned HTTP code " + strconv.Itoa(resp.StatusCode))
+	return nil, &httpStatusError{link: link, code: resp.StatusCode}
 }
 
 // response fetches a URL using the default instance's device headers (for

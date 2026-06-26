@@ -1,6 +1,7 @@
 package hls
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -34,21 +35,32 @@ func (inst *Instance) handleContent(cr *ContentRequest) {
 }
 
 func (inst *Instance) handleContentUnknown(cr *ContentRequest) {
-	// Retry on 458 (device not prioritized) — the real STB player retries
-	// while the streaming server registers the device. Up to 5 attempts
-	// with 500ms/1s/2s/3s backoff, matching real MAG firmware behavior.
+	// Retry on 458 (device not prioritized) — the real STB player gets a
+	// fresh create_link (new play_token) on each retry. The CDN may
+	// invalidate tokens after a failed attempt, so we re-resolve the link
+	// instead of retrying the same URL.
 	var resp *http.Response
 	var err error
 	backoffs := []time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second, 3 * time.Second, 4 * time.Second}
 	for attempt := 0; attempt <= len(backoffs); attempt++ {
+		if attempt > 0 {
+			// Get a fresh CDN URL with new play_token from the portal
+			if newLink, linkErr := cr.ChannelRef.StalkerChannel.NewLink(true); linkErr == nil {
+				cr.ChannelRef.Link = newLink
+			}
+		}
 		resp, err = instanceResponse(cr.ChannelRef.Link, inst)
 		if err != nil {
+			// instanceResponse closes the body and reports a non-2xx
+			// status as an httpStatusError. A 458 ("device not
+			// prioritized") is transient — back off and re-resolve the
+			// link with a fresh play_token on the next attempt.
+			var se *httpStatusError
+			if errors.As(err, &se) && se.code == 458 && attempt < len(backoffs) {
+				time.Sleep(backoffs[attempt])
+				continue
+			}
 			break
-		}
-		if resp.StatusCode == 458 && attempt < len(backoffs) {
-			resp.Body.Close()
-			time.Sleep(backoffs[attempt])
-			continue
 		}
 		break
 	}
