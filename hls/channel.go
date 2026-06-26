@@ -21,6 +21,17 @@ const (
 	// hlsKeepAliveIdleTimeout is how long a channel can go without any STB
 	// requests before the keep-alive goroutine stops.
 	hlsKeepAliveIdleTimeout = 120 * time.Second
+
+	// hlsLinkValidityTimeout is how long a resolved channel link is reused
+	// before we force a fresh create_link. Kept generous so slow-starting
+	// channels (heavy initial buffering / slow upstream — e.g. some FHD
+	// feeds) have time to actually begin playback before the link is treated
+	// as stale and re-resolved. Safe to extend because the keep-alive
+	// goroutine refreshes the streaming-server session every
+	// hlsKeepAliveInterval, so the upstream session won't expire underneath
+	// it; and forcing create_link too eagerly on a busy portal risks
+	// transient "limit" errors that break playback outright.
+	hlsLinkValidityTimeout = 90 * time.Second
 )
 
 var (
@@ -145,13 +156,9 @@ func (c *Channel) isValid() bool {
 		return false
 	}
 
-	// 30 seconds timeout for HLS content
-	if c.LinkType == linkTypeHLS {
-		return time.Since(c.lastAccess).Seconds() <= 30
-	}
-
-	// 30 seconds for everything else - gives the player enough headroom to
-	// start playback (initial buffering, slow upstream) before we treat the
-	// link as stale and force a fresh create_link call.
-	return time.Since(c.lastAccess).Seconds() <= 30
+	// Same generous validity window for HLS and direct media: gives the
+	// player enough headroom to start playback (initial buffering, slow
+	// upstream) before the link is treated as stale and a fresh create_link
+	// is forced.
+	return time.Since(c.lastAccess) <= hlsLinkValidityTimeout
 }

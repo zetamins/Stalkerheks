@@ -72,7 +72,21 @@ var httpClient = &http.Client{
 	},
 }
 
+// maxRedirects caps how many consecutive 3xx hops response() will follow.
+// Because the client disables auto-follow (CheckRedirect → ErrUseLastResponse)
+// so it can reapply the device headers on each hop, response() follows
+// redirects by re-issuing the request itself. Without a cap, a redirect loop
+// (A→B→A) or an endless chain from a misbehaving CDN would recurse until the
+// goroutine's stack is exhausted — and in the handleContentUnknown path it
+// would do so while still holding the channel's mutex, deadlocking it. Match
+// Go's own http.Client default of 10.
+const maxRedirects = 10
+
 func response(link string) (*http.Response, error) {
+	return responseFollow(link, 0)
+}
+
+func responseFollow(link string, depth int) (*http.Response, error) {
 	req, err := http.NewRequest("GET", link, nil)
 	if err != nil {
 		return nil, err
@@ -98,6 +112,9 @@ func response(link string) (*http.Response, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		if depth >= maxRedirects {
+			return nil, errors.New("stopped after " + strconv.Itoa(maxRedirects) + " redirects following " + link)
+		}
 		linkURL, err := url.Parse(link)
 		if err != nil {
 			return nil, errors.New("unknown error occurred")
@@ -107,7 +124,7 @@ func response(link string) (*http.Response, error) {
 			return nil, errors.New("unknown error occurred")
 		}
 		newLink := linkURL.ResolveReference(redirectURL)
-		return response(newLink.String())
+		return responseFollow(newLink.String(), depth+1)
 	}
 
 	return nil, errors.New(link + " returned HTTP code " + strconv.Itoa(resp.StatusCode))
