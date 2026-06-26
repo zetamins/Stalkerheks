@@ -60,7 +60,7 @@ func profileNameByID(id int) (string, bool) {
 }
 
 func readStr(env *C.JNIEnv, str C.jstring) string {
-	if str == nil {
+	if str == 0 {
 		return ""
 	}
 	// GetStringUTFChars pins a JNI char buffer that must be released, or it
