@@ -34,8 +34,10 @@ func getContentRequest(w http.ResponseWriter, r *http.Request, expectedPrefix st
 		return nil, err
 	}
 
-	// Find channel reference
+	// Find channel reference (playlist is swapped wholesale by SetChannels).
+	playlistMu.RLock()
 	channelRef, ok := playlist[reqPathParts[0]]
+	playlistMu.RUnlock()
 	if !ok {
 		return nil, errors.New("bad request")
 	}

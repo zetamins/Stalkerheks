@@ -1,10 +1,16 @@
 package com.stalkerhek.app
 
 import android.Manifest
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -50,9 +56,53 @@ class MainActivity : ComponentActivity() {
         }
 
         startEngineService()
+        requestBatteryExemption()
         setContent {
             MaterialTheme {
                 StalkerApp()
+            }
+        }
+    }
+
+    /**
+     * Ask the OS to exempt this app from battery optimization so the foreground
+     * engine isn't frozen in the background — the #1 reason the proxy/dashboard
+     * ports take minutes to respond on aggressive-power-management devices
+     * (Huawei/EMUI, Xiaomi, etc.). Once granted, the system never asks again.
+     * On Huawei specifically the standard exemption often isn't enough, so we
+     * also try to open the EMUI "protected apps" startup manager.
+     */
+    private fun requestBatteryExemption() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (pm.isIgnoringBatteryOptimizations(packageName)) return
+
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            if (intent.resolveActivity(packageManager) != null) {
+                startActivity(intent)
+            } else {
+                // Fallback: open the generic battery-optimization list.
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }
+        } catch (e: Exception) {
+            Log.w("Stalkerhek", "Battery exemption request failed", e)
+        }
+
+        // EMUI/HarmonyOS "protected apps" / startup manager — best-effort, the
+        // component name differs across versions so failures are expected and
+        // ignored. Only attempted on Huawei devices.
+        if (Build.MANUFACTURER.equals("HUAWEI", ignoreCase = true) ||
+            Build.MANUFACTURER.equals("HONOR", ignoreCase = true)
+        ) {
+            for (cn in HUAWEI_PROTECTED_APPS_COMPONENTS) {
+                try {
+                    startActivity(Intent().apply { component = cn })
+                    break
+                } catch (_: Exception) {
+                    // try next known component
+                }
             }
         }
     }
@@ -64,6 +114,26 @@ class MainActivity : ComponentActivity() {
         } else {
             startService(si)
         }
+    }
+
+    companion object {
+        // Known EMUI/HarmonyOS startup-manager activities across versions; the
+        // first that resolves is opened so the user can allow auto-launch /
+        // background running. Component names vary by version, hence the list.
+        private val HUAWEI_PROTECTED_APPS_COMPONENTS = listOf(
+            ComponentName(
+                "com.huawei.systemmanager",
+                "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"
+            ),
+            ComponentName(
+                "com.huawei.systemmanager",
+                "com.huawei.systemmanager.appcontrol.activity.StartupAppControlActivity"
+            ),
+            ComponentName(
+                "com.huawei.systemmanager",
+                "com.huawei.systemmanager.optimize.process.ProtectActivity"
+            ),
+        )
     }
 }
 

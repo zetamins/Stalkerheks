@@ -10,6 +10,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- Lets the app prompt the user to exempt it from battery optimization.
+         Critical on Huawei/EMUI and other aggressive-power-management OEMs,
+         which otherwise freeze the background engine and make the proxy/
+         dashboard ports take minutes to respond. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:name=".StalkerApplication"

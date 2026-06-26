@@ -9,20 +9,42 @@ import (
 
 // Handles '/iptv' requests
 func playlistHandler(w http.ResponseWriter, r *http.Request) {
+	if !channelsAreReady() {
+		http.Error(w, "channels still loading, try again shortly", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Snapshot titles+genres under the lock, then write outside it so a slow
+	// client can't block SetChannels.
+	playlistMu.RLock()
+	titles := make([]string, len(sortedChannels))
+	copy(titles, sortedChannels)
+	genres := make(map[string]string, len(titles))
+	for _, title := range titles {
+		if ch := playlist[title]; ch != nil {
+			genres[title] = ch.Genre
+		}
+	}
+	playlistMu.RUnlock()
+
 	w.Header().Set("Content-Type", "audio/x-mpegurl; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 
 	fmt.Fprintln(w, "#EXTM3U")
-	for _, title := range sortedChannels {
+	for _, title := range titles {
 		link := "/iptv/" + url.PathEscape(title)
 		logo := "/logo/" + url.PathEscape(title)
 
-		fmt.Fprintf(w, "#EXTINF:-1 tvg-logo=\"%s\" group-title=\"%s\", %s\n%s\n", logo, playlist[title].Genre, title, link)
+		fmt.Fprintf(w, "#EXTINF:-1 tvg-logo=\"%s\" group-title=\"%s\", %s\n%s\n", logo, genres[title], title, link)
 	}
 }
 
 // Handles '/iptv/' requests
 func channelHandler(w http.ResponseWriter, r *http.Request) {
+	if !channelsAreReady() {
+		http.Error(w, "channels still loading, try again shortly", http.StatusServiceUnavailable)
+		return
+	}
 	cr, err := getContentRequest(w, r, "/iptv/")
 	if err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -46,6 +68,10 @@ func channelHandler(w http.ResponseWriter, r *http.Request) {
 
 // Handles '/logo/' requests
 func logoHandler(w http.ResponseWriter, r *http.Request) {
+	if !channelsAreReady() {
+		http.Error(w, "channels still loading, try again shortly", http.StatusServiceUnavailable)
+		return
+	}
 	cr, err := getContentRequest(w, r, "/logo/")
 	if err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)

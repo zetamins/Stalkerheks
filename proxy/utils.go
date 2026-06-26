@@ -106,7 +106,8 @@ func getRequest(link string, originalRequest *http.Request) (*http.Response, err
 				// Drop unknown X-* headers from the STB (could leak device info)
 				continue
 			}
-			req.Header.Set(k, v[0])
+			// Preserve all values of multi-valued headers, not just the first.
+			req.Header[k] = v
 		}
 	}
 

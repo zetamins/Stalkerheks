@@ -74,21 +74,23 @@ func main() {
 	var wg sync.WaitGroup
 
 	if c.HLS.Enabled {
+		hls.SetUserAgent(c.Portal.Model)
+		hls.SetDeviceHeaders(c.Portal.MAC, c.Portal.Model, c.Portal.SerialNumber)
+		hls.SetChannels(channels)
 		wg.Add(1)
 		go func() {
 			log.Println("Starting HLS service...")
-			hls.SetUserAgent(c.Portal.Model)
-			hls.SetDeviceHeaders(c.Portal.MAC, c.Portal.Model, c.Portal.SerialNumber)
-			hls.Start(channels, c.HLS.Bind)
+			hls.Serve(c.HLS.Bind)
 			wg.Done()
 		}()
 	}
 
 	if c.Proxy.Enabled {
+		proxy.SetChannels(channels)
 		wg.Add(1)
 		go func() {
 			log.Println("Starting proxy service...")
-			proxy.Start(c, channels)
+			proxy.Serve(c, c.Proxy.Bind)
 			wg.Done()
 		}()
 	}

@@ -76,7 +76,20 @@ func startProfileInProcess(name string) error {
 		return err
 	}
 
-	// Start portal, fetch channels, then start HLS + proxy
+	// Bind the public listeners immediately so the ports are reachable within
+	// milliseconds, before the (possibly slow) portal handshake. Channels are
+	// injected via SetChannels once retrieved; until then channel requests
+	// return 503.
+	if c.HLS.Enabled {
+		hls.SetUserAgent(c.Portal.Model)
+		hls.SetDeviceHeaders(c.Portal.MAC, c.Portal.Model, c.Portal.SerialNumber)
+		go hls.Serve(c.HLS.Bind)
+	}
+	if c.Proxy.Enabled {
+		go proxy.Serve(c, c.Proxy.Bind)
+	}
+
+	// Start portal, fetch channels, then publish them to the listening services.
 	go func() {
 		log.Printf("Connecting to portal %s...", name)
 		if err := c.Portal.Start(); err != nil {
@@ -93,8 +106,16 @@ func startProfileInProcess(name string) error {
 		for _, ch := range chs {
 			channelStore[ch.CMD] = ch
 		}
+		snapshot := channelStore
 		chanMu.Unlock()
 		log.Printf("Profile %s: loaded %d channels", name, len(chs))
+
+		if c.HLS.Enabled {
+			hls.SetChannels(snapshot)
+		}
+		if c.Proxy.Enabled {
+			proxy.SetChannels(snapshot)
+		}
 
 		// Real STBs dispatch get_all_channels (and other loads) before their
 		// first watchdog send, so start the watchdog only after
@@ -104,19 +125,6 @@ func startProfileInProcess(name string) error {
 		}
 		if err := c.Portal.StartWatchdog(); err != nil {
 			log.Printf("Portal %s: failed to start watchdog: %v", name, err)
-		}
-
-		if c.HLS.Enabled {
-			go func() {
-				hls.SetUserAgent(c.Portal.Model)
-				hls.SetDeviceHeaders(c.Portal.MAC, c.Portal.Model, c.Portal.SerialNumber)
-				hls.Start(channelStore, c.HLS.Bind)
-			}()
-		}
-		if c.Proxy.Enabled {
-			go func() {
-				proxy.Start(c, channelStore)
-			}()
 		}
 	}()
 

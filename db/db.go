@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io/ioutil"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
@@ -88,6 +87,14 @@ func DefaultStore(dir string) (*Store, error) {
 func (s *Store) readAll() (map[string]Profile, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.readAllLocked()
+}
+
+// readAllLocked is readAll without locking. Callers that perform a
+// read-modify-write (Save, Delete) hold s.mu across the whole sequence and use
+// this, so a concurrent writer can't slip in between the read and the write
+// and clobber the update.
+func (s *Store) readAllLocked() (map[string]Profile, error) {
 	data, err := ioutil.ReadFile(s.path)
 	if err != nil {
 		return make(map[string]Profile), nil
@@ -102,6 +109,11 @@ func (s *Store) readAll() (map[string]Profile, error) {
 func (s *Store) writeAll(m map[string]Profile) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.writeAllLocked(m)
+}
+
+// writeAllLocked is writeAll without locking — see readAllLocked.
+func (s *Store) writeAllLocked(m map[string]Profile) error {
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
@@ -134,8 +146,6 @@ func (s *Store) GetAll() []Profile {
 // from device_id if empty, normalizes the portal URL, and generates a token
 // if none is provided.
 func (s *Store) Save(p Profile) error {
-	m, _ := s.readAll()
-
 	// Apply defaults first
 	if p.Portal.Model == "" {
 		p.Portal.Model = "MAG254"
@@ -176,15 +186,23 @@ func (s *Store) Save(p Profile) error {
 		p.Portal.URL2 = normalizeURL(p.Portal.URL2)
 	}
 
+	// Hold the write lock across the read-modify-write so two concurrent Saves
+	// (e.g. two dashboard POSTs) can't both read, then both write, losing one
+	// of the updates.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, _ := s.readAllLocked()
 	m[p.Name] = p
-	return s.writeAll(m)
+	return s.writeAllLocked(m)
 }
 
 // Delete removes a profile by name.
 func (s *Store) Delete(name string) error {
-	m, _ := s.readAll()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, _ := s.readAllLocked()
 	delete(m, name)
-	return s.writeAll(m)
+	return s.writeAllLocked(m)
 }
 
 // normalizeURL ensures the URL points to the portal API endpoint.
@@ -196,13 +214,19 @@ func normalizeURL(raw string) string {
 	return raw + "/portal.php"
 }
 
+// randomToken returns a 32-char uppercase-hex token. Uses crypto/rand rather
+// than math/rand: on go1.13 the global math/rand source is not auto-seeded
+// (that's go1.20+), so the old version handed out the *same* token sequence on
+// every process start — predictable, and collision-prone across devices.
 func randomToken() string {
-	const charset = "ABCDEF0123456789"
-	b := make([]byte, 32)
-	for i := range b {
-		b[i] = charset[rand.Intn(len(charset))]
+	b := make([]byte, 16) // 16 bytes -> 32 hex chars
+	if _, err := cryptorand.Read(b); err != nil {
+		// fallback in the astronomically unlikely event of crypto/rand failure
+		for i := range b {
+			b[i] = byte(i ^ 0xA5)
+		}
 	}
-	return string(b)
+	return strings.ToUpper(hex.EncodeToString(b))
 }
 
 // randomUIDSecret generates a root secret for stalker.Portal.GetUID — the

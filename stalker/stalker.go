@@ -4,10 +4,19 @@ import (
 	"errors"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
+
+// maxPortalRedirects caps redirect hops in doHTTPRequest. Like hls.response,
+// this client follows redirects manually (to reapply the full header set on
+// every hop), so without a cap a redirect loop (A→B→A) or an endless chain
+// would recurse until the goroutine's stack is exhausted and the process
+// crashes. Match Go's own http.Client default of 10.
+const maxPortalRedirects = 10
 
 // Start connects to stalker portal, reserves token, starts watchdog etc.
 func (p *Portal) Start() error {
@@ -103,8 +112,29 @@ func (p *Portal) StopWatchdog() {
 // redirect chains. httpRequest follows redirects itself instead, reapplying
 // the full header set on every hop.
 var httpRedirectClient = &http.Client{
+	// Overall per-request cap. The portal API calls are small JSON, so a
+	// bounded timeout is safe here (this client never streams media — that's
+	// the proxy/hls clients). Without it, a single un-timed call could hang
+	// for the OS-level TCP timeout: on devices that get a black-holed IPv6
+	// address (common on Huawei/EMUI when DNS returns only AAAA, with no IPv4
+	// to race against), the ~7 sequential boot calls stacked up into a
+	// many-minute startup during which the proxy/HLS ports never even bound.
+	Timeout: 30 * time.Second,
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
+	},
+	Transport: &http.Transport{
+		// Fail a dead/black-holed connection fast instead of waiting on the
+		// OS default, so a slow portal can't stall the whole engine startup.
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		MaxIdleConns:          8,
+		IdleConnTimeout:       90 * time.Second,
 	},
 }
 
@@ -128,6 +158,10 @@ func (p *Portal) httpRequest(link string) ([]byte, error) {
 }
 
 func (p *Portal) doHTTPRequest(link string) (*http.Response, error) {
+	return p.doHTTPRequestFollow(link, 0)
+}
+
+func (p *Portal) doHTTPRequestFollow(link string, depth int) (*http.Response, error) {
 	req, err := http.NewRequest("GET", link, nil)
 	if err != nil {
 		return nil, err
@@ -152,6 +186,9 @@ func (p *Portal) doHTTPRequest(link string) (*http.Response, error) {
 	}
 
 	defer resp.Body.Close()
+	if depth >= maxPortalRedirects {
+		return nil, errors.New("stopped after " + strconv.Itoa(maxPortalRedirects) + " redirects following " + link)
+	}
 	linkURL, err := url.Parse(link)
 	if err != nil {
 		return nil, err
@@ -160,7 +197,7 @@ func (p *Portal) doHTTPRequest(link string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	return p.doHTTPRequest(linkURL.ResolveReference(redirectURL).String())
+	return p.doHTTPRequestFollow(linkURL.ResolveReference(redirectURL).String(), depth+1)
 }
 
 // watchdogUpdate performs a watchdog update request. init should be true only

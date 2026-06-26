@@ -113,28 +113,39 @@ func (c *Channel) validate() error {
 // this, the server expires the session and returns 458 (not prioritized).
 func (c *Channel) startKeepAlive() {
 	c.keepAliveOnce.Do(func() {
-		c.keepAliveStop = make(chan struct{})
+		// Capture the stop channel in a local so the goroutine never re-reads
+		// c.keepAliveStop (which stopKeepAlive nils out under c.Mux) — reading
+		// it unsynchronized was both a data race and a way to miss the signal.
+		stop := make(chan struct{})
+		c.keepAliveStop = stop
 		go func() {
 			ticker := time.NewTicker(hlsKeepAliveInterval)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-ticker.C:
+					// lastAccess and HLSLink are mutated by request handlers
+					// under c.Mux, so read them under the same lock rather than
+					// racing on the bare fields.
+					c.Mux.Lock()
+					lastAccess := c.lastAccess
+					hlsLink := c.HLSLink
+					c.Mux.Unlock()
 					// Check if channel is still being watched
-					if time.Since(c.lastAccess) > hlsKeepAliveIdleTimeout {
+					if time.Since(lastAccess) > hlsKeepAliveIdleTimeout {
 						return
 					}
 					// Refresh the HLS playlist to keep session alive.
 					// We just fetch the playlist URL; the response keeps
 					// the streaming server session from expiring.
-					resp, err := httpClient.Get(c.HLSLink)
+					resp, err := httpClient.Get(hlsLink)
 					if err != nil {
 						log.Printf("HLS keep-alive refresh failed for %s: %v", c.StalkerChannel.Title, err)
 						continue
 					}
 					resp.Body.Close()
 					log.Printf("HLS keep-alive refreshed: %s", c.StalkerChannel.Title)
-				case <-c.keepAliveStop:
+				case <-stop:
 					return
 				}
 			}
@@ -142,8 +153,13 @@ func (c *Channel) startKeepAlive() {
 	})
 }
 
-// stopKeepAlive stops the keep-alive goroutine for this channel.
+// stopKeepAlive stops the keep-alive goroutine for this channel. Guarded by
+// c.Mux (the same lock startKeepAlive's caller holds when assigning
+// keepAliveStop) so concurrent calls can't double-close the channel, and
+// idempotent so calling it on a channel that never started one is a no-op.
 func (c *Channel) stopKeepAlive() {
+	c.Mux.Lock()
+	defer c.Mux.Unlock()
 	if c.keepAliveStop != nil {
 		close(c.keepAliveStop)
 		c.keepAliveStop = nil

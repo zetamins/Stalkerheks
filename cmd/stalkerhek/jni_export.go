@@ -4,10 +4,15 @@ package main
 
 /*
 #include <jni.h>
+#include <stdlib.h>
 
 static const char* jniReadString(JNIEnv* env, jstring str) {
-    if (str == NULL) return "";
+    if (str == NULL) return NULL;
     return (*env)->GetStringUTFChars(env, str, NULL);
+}
+
+static void jniReleaseString(JNIEnv* env, jstring str, const char* cs) {
+    if (str != NULL && cs != NULL) (*env)->ReleaseStringUTFChars(env, str, cs);
 }
 
 static jstring jniMakeString(JNIEnv* env, const char* s) {
@@ -21,6 +26,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/erkexzcx/stalkerhek/dashboard"
 	"github.com/erkexzcx/stalkerhek/db"
@@ -54,11 +60,26 @@ func profileNameByID(id int) (string, bool) {
 }
 
 func readStr(env *C.JNIEnv, str C.jstring) string {
-	return C.GoString(C.jniReadString(env, str))
+	if str == nil {
+		return ""
+	}
+	// GetStringUTFChars pins a JNI char buffer that must be released, or it
+	// leaks on every call; C.GoString copies it first so the Go string stays
+	// valid after release.
+	cs := C.jniReadString(env, str)
+	if cs == nil {
+		return ""
+	}
+	defer C.jniReleaseString(env, str, cs)
+	return C.GoString(cs)
 }
 
 func makeStr(env *C.JNIEnv, s string) C.jstring {
-	return C.jniMakeString(env, C.CString(s))
+	// C.CString mallocs a copy that NewStringUTF then duplicates into a Java
+	// String — the malloc'd buffer must be freed or it leaks on every call.
+	cs := C.CString(s)
+	defer C.free(unsafe.Pointer(cs))
+	return C.jniMakeString(env, cs)
 }
 
 //export Java_com_stalkerhek_app_engine_EngineBridge_nativeInit
@@ -108,7 +129,21 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeStartProfile(env *C.JNIEn
 	// "running", with the actual stop function (never a fake PID).
 	dashboard.MarkRunning(req.Name, func() { stopProfileByName(req.Name) })
 
-	// Start portal + fetch channels, then start HLS + proxy in parallel goroutines
+	// Bind the public listeners immediately so :HLS/:proxy are reachable within
+	// milliseconds — before the (possibly minutes-long, on flaky networks)
+	// portal handshake. Channel data is injected via SetChannels once the
+	// portal list is retrieved; until then channel requests return 503.
+	if c.HLS.Enabled {
+		hls.SetUserAgent(c.Portal.Model)
+		hls.SetDeviceHeaders(c.Portal.MAC, c.Portal.Model, c.Portal.SerialNumber)
+		go hls.Serve(c.HLS.Bind)
+	}
+	if c.Proxy.Enabled {
+		go proxy.Serve(c, c.Proxy.Bind)
+	}
+
+	// Connect to the portal + fetch channels in the background, then publish
+	// the channel list to the already-listening services.
 	go func() {
 		log.Printf("Connecting to portal %s...", req.Name)
 		if err := c.Portal.Start(); err != nil {
@@ -123,6 +158,13 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeStartProfile(env *C.JNIEn
 		stateMu.Unlock()
 		log.Printf("Profile %s: loaded %d channels", req.Name, len(chs))
 
+		if c.HLS.Enabled {
+			hls.SetChannels(chs)
+		}
+		if c.Proxy.Enabled {
+			proxy.SetChannels(chs)
+		}
+
 		// Real STBs dispatch get_all_channels (and other loads) before their
 		// first watchdog send, so start the watchdog only after
 		// RetrieveChannels above, not as part of Portal.Start().
@@ -131,19 +173,6 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeStartProfile(env *C.JNIEn
 		}
 		if err := c.Portal.StartWatchdog(); err != nil {
 			log.Printf("Portal %s: failed to start watchdog: %v", req.Name, err)
-		}
-
-		if c.HLS.Enabled {
-			go func() {
-				hls.SetUserAgent(c.Portal.Model)
-				hls.SetDeviceHeaders(c.Portal.MAC, c.Portal.Model, c.Portal.SerialNumber)
-				hls.Start(chs, c.HLS.Bind)
-			}()
-		}
-		if c.Proxy.Enabled {
-			go func() {
-				proxy.Start(c, chs)
-			}()
 		}
 	}()
 

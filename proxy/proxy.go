@@ -27,6 +27,12 @@ var (
 
 	channels map[string]*stalker.Channel
 
+	// channelsMu guards channels/channelsByTitle. They're populated by
+	// SetChannels (after the portal list is retrieved) while requestHandler and
+	// rewriteChannelListCmds read them, so access is synchronized — the
+	// listener now binds before channels exist.
+	channelsMu sync.RWMutex
+
 	// channelsByTitle indexes the same channels by title (name) rather than
 	// by their raw upstream "cmd" string. Needed because this operator's
 	// portal rotates the play_token embedded in "cmd" on every single
@@ -90,19 +96,14 @@ func generateRandomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// Start starts main routine.
-func Start(c *stalker.Config, chs map[string]*stalker.Channel) {
+// Serve installs the config and binds the proxy listener immediately — before
+// channels are loaded — so the port is reachable within milliseconds instead of
+// only after the (potentially minutes-long) portal handshake. Most requests are
+// forwarded to the real portal and work as soon as the listener is up;
+// create_link and the channel-list rewrite need the channel maps, which arrive
+// later via SetChannels. Blocks until Stop is called or the listener fails.
+func Serve(c *stalker.Config, bind string) {
 	config = c
-
-	// Channels matched primarily by CMD field; chs is already title-keyed
-	// (stalker.RetrieveChannels builds it that way), so just keep that
-	// indexing around too rather than rebuilding it — see channelsByTitle.
-	newChannels := make(map[string]*stalker.Channel)
-	for _, v := range chs {
-		newChannels[v.CMD] = v
-	}
-	channels = newChannels
-	channelsByTitle = chs
 
 	// extract scheme://hostname:port from given URL, so we don't have to do it later
 	link, err := url.Parse(config.Portal.Location)
@@ -118,15 +119,30 @@ func Start(c *stalker.Config, chs map[string]*stalker.Channel) {
 	mux.HandleFunc("/_speedtest/", speedtestProxyHandler)
 	mux.HandleFunc("/", requestHandler)
 
-	srv := &http.Server{Addr: config.Proxy.Bind, Handler: mux}
+	srv := &http.Server{Addr: bind, Handler: mux}
 	serverMu.Lock()
 	server = srv
 	serverMu.Unlock()
 
-	log.Println("Proxy service should be started!")
+	log.Println("Proxy service listening on", bind)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Println("Proxy ListenAndServe error:", err)
 	}
+}
+
+// SetChannels populates the channel lookup maps used by create_link and the
+// channel-list cmd rewrite. Safe to call after Serve has already started.
+// Channels are matched primarily by CMD field; chs is also kept title-keyed
+// (stalker.RetrieveChannels builds it that way) — see channelsByTitle.
+func SetChannels(chs map[string]*stalker.Channel) {
+	newChannels := make(map[string]*stalker.Channel, len(chs))
+	for _, v := range chs {
+		newChannels[v.CMD] = v
+	}
+	channelsMu.Lock()
+	channels = newChannels
+	channelsByTitle = chs
+	channelsMu.Unlock()
 }
 
 // Stop gracefully shuts down the proxy HTTP server, if running. Safe to call
@@ -216,6 +232,7 @@ func requestHandler(w http.ResponseWriter, r *http.Request) {
 		// "cmd" it received from the already-rewritten channel list (see
 		// rewriteChannelListCmds) — an /iptv/<title> URL of our own, not
 		// the upstream's. Fall back to resolving by title in that case.
+		channelsMu.RLock()
 		channel, found := channels[tagCMD]
 		if !found {
 			if idx := strings.Index(tagCMD, "/iptv/"); idx >= 0 {
@@ -224,6 +241,7 @@ func requestHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		channelsMu.RUnlock()
 		if !found {
 			log.Println("STB requested 'create_link', but gave invalid CMD:", tagCMD)
 			http.Error(w, "bad request", http.StatusBadRequest)
@@ -498,14 +516,20 @@ func rewriteVodResponse(body string, requestHost string) string {
 			continue
 		}
 		start := idx + len(prefix)
-		// Find the end of the URL (closing quote or space before closing quote)
-		end := strings.IndexAny(body[start:], ` "\`)
+		// Find the end of the URL: the JSON string's closing quote or a space
+		// separator. Backslash is deliberately NOT a terminator — the cmd value
+		// is JSON-escaped (http:\/\/host\/path), so stopping at the first '\'
+		// truncated the URL to "http:" and produced a garbage /vod/ link.
+		end := strings.IndexAny(body[start:], ` "`)
 		if end < 0 {
 			end = len(body) - start
 		}
 		originalURL := body[start : start+end]
-		if strings.HasPrefix(originalURL, "http") {
-			encoded := base64.URLEncoding.EncodeToString([]byte(originalURL))
+		// originalURL is still JSON-escaped; decode the escapes before using it
+		// as a real URL to fetch and base64-encode.
+		decodedURL := unescapeJSONString(originalURL)
+		if strings.HasPrefix(decodedURL, "http") {
+			encoded := base64.URLEncoding.EncodeToString([]byte(decodedURL))
 			// The STB's command format: "ffmpeg http://<host>/vod/<encoded>"
 			newURL := "http://" + requestHost + "/vod/" + encoded
 			// Replace in the original prefix format
@@ -518,7 +542,7 @@ func rewriteVodResponse(body string, requestHost string) string {
 					`"cmd":"`+originalURL,
 					`"cmd":"`+newURL, 1)
 			}
-			log.Printf("  -> VOD URL rewritten: %s -> /vod/...", originalURL[:min(50, len(originalURL))])
+			log.Printf("  -> VOD URL rewritten: %s -> /vod/...", decodedURL[:min(50, len(decodedURL))])
 		}
 		break
 	}
@@ -617,6 +641,10 @@ func lastJSONStringFieldBefore(body, key string, before int) (unescaped string, 
 // the live response's own "id" field, when the plain name misses.
 func rewriteChannelListCmds(body, requestHost string) string {
 	_, portHLS, _ := net.SplitHostPort(config.HLS.Bind)
+
+	// Held for the whole scan: pure string work, no I/O, many map lookups.
+	channelsMu.RLock()
+	defer channelsMu.RUnlock()
 
 	var sb strings.Builder
 	sb.Grow(len(body))

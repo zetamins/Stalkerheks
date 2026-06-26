@@ -17,6 +17,10 @@ var reURILinkExtract = regexp.MustCompile(`URI="([^"]*)"`)
 func rewriteLinks(rbody *io.ReadCloser, prefix, linkRoot string) string {
 	var sb strings.Builder
 	scanner := bufio.NewScanner(*rbody)
+	// Default Scanner token cap is 64KB; a single very long M3U8 line (e.g. a
+	// segment URL with a large signed query string) would otherwise be
+	// silently dropped. Allow up to 1MB per line.
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	linkRootURL, _ := url.Parse(linkRoot) // It will act as a base URL for full URLs
 
 	modifyLink := func(link string) string {
@@ -45,8 +49,11 @@ func rewriteLinks(rbody *io.ReadCloser, prefix, linkRoot string) string {
 		if !strings.HasPrefix(line, "#") {
 			line = modifyLink(line)
 		} else if strings.Contains(line, "URI=\"") && !strings.Contains(line, "URI=\"\"") {
-			link := reURILinkExtract.FindStringSubmatch(line)[1]
-			line = reURILinkExtract.ReplaceAllString(line, `URI="`+modifyLink(link)+`"`)
+			// A line containing `URI="` but no closing quote (malformed
+			// playlist) yields no submatch — indexing [1] then panicked.
+			if m := reURILinkExtract.FindStringSubmatch(line); m != nil {
+				line = reURILinkExtract.ReplaceAllString(line, `URI="`+modifyLink(m[1])+`"`)
+			}
 		}
 		sb.WriteString(line)
 		sb.WriteByte('\n')

@@ -166,6 +166,14 @@ func (p *Portal) RetrieveChannels() (map[string]*Channel, error) {
 		if _, exists := channels[title]; exists {
 			title = v.Name + " (" + v.ID + ")"
 		}
+		// Not every channel carries a "cmds" entry (disabled/placeholder
+		// channels on some portals list an empty array) — indexing [0]
+		// unconditionally panicked and took down the whole channel load.
+		var cmdID, cmdCHID string
+		if len(v.CMDs) > 0 {
+			cmdID = v.CMDs[0].ID
+			cmdCHID = v.CMDs[0].CH_ID
+		}
 		channels[title] = &Channel{
 			Title:     title,
 			CMD:       v.Cmd,
@@ -173,8 +181,8 @@ func (p *Portal) RetrieveChannels() (map[string]*Channel, error) {
 			Portal:    p,
 			GenreID:   v.GenreID,
 			Genres:    &genres,
-			CMD_CH_ID: v.CMDs[0].ID,
-			CMD_ID:    v.CMDs[0].CH_ID,
+			CMD_ID:    cmdID,
+			CMD_CH_ID: cmdCHID,
 		}
 	}
 
