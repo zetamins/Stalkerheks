@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 func (inst *Instance) handleContent(cr *ContentRequest) {
@@ -33,7 +34,24 @@ func (inst *Instance) handleContent(cr *ContentRequest) {
 }
 
 func (inst *Instance) handleContentUnknown(cr *ContentRequest) {
-	resp, err := instanceResponse(cr.ChannelRef.Link, inst)
+	// Retry on 458 (device not prioritized) — the real STB player retries
+	// while the streaming server registers the device. Up to 5 attempts
+	// with 500ms/1s/2s/3s backoff, matching real MAG firmware behavior.
+	var resp *http.Response
+	var err error
+	backoffs := []time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second, 3 * time.Second, 4 * time.Second}
+	for attempt := 0; attempt <= len(backoffs); attempt++ {
+		resp, err = instanceResponse(cr.ChannelRef.Link, inst)
+		if err != nil {
+			break
+		}
+		if resp.StatusCode == 458 && attempt < len(backoffs) {
+			resp.Body.Close()
+			time.Sleep(backoffs[attempt])
+			continue
+		}
+		break
+	}
 	if err != nil {
 		cr.ChannelRef.Mux.Unlock()
 		http.Error(cr.ResponseWriter, "internal server error", http.StatusInternalServerError)
