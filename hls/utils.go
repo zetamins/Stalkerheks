@@ -111,13 +111,6 @@ func responseFollowWithUA(link, userAgent, mac, model, hash, serial string, dept
 	return nil, &httpStatusError{link: link, code: resp.StatusCode}
 }
 
-// response fetches a URL using the default instance's device headers (for
-// backward compatibility).
-func response(link string) (*http.Response, error) {
-	inst := defaultInstance
-	return responseWithUA(link, inst.userAgentString(), inst.deviceMac, inst.deviceModel, inst.deviceHash, inst.deviceSerial)
-}
-
 // instanceResponse fetches a URL with the given instance's device headers.
 func instanceResponse(link string, inst *Instance) (*http.Response, error) {
 	return responseWithUA(link, inst.userAgentString(), inst.deviceMac, inst.deviceModel, inst.deviceHash, inst.deviceSerial)
