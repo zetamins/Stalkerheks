@@ -58,10 +58,16 @@ func (c *Channel) NewLink(retry bool) (string, error) {
 }
 
 func isTransientCreateLinkError(err error) bool {
-	msg := err.Error()
+	// Transient upstream/CDN hiccups — the portal returning HTTP 5xx (500,
+	// 502, 503, 520, 522, …) clears on retry, like a real STB re-issuing
+	// create_link a moment later. 4xx (auth, not-found) are fatal.
+	var se *httpStatusError
+	if errors.As(err, &se) {
+		return se.code >= 500
+	}
 	// Real STB treats "limit" as FATAL (shows notice, does not retry).
 	// Only "temporary_unavailable" is retried on create_link level.
-	return strings.Contains(msg, "temporary_unavailable")
+	return strings.Contains(err.Error(), "temporary_unavailable")
 }
 
 func (c *Channel) newLinkOnce() (string, error) {

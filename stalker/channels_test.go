@@ -1,6 +1,7 @@
 package stalker
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -76,6 +77,57 @@ func TestChannelNewLinkError(t *testing.T) {
 	_, err := c.NewLink(false)
 	if err == nil {
 		t.Fatal("expected error for nothing_to_play")
+	}
+}
+
+func TestIsTransientCreateLinkError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"http 500", &httpStatusError{code: 500, status: "500 Internal Server Error"}, true},
+		{"http 502", &httpStatusError{code: 502, status: "502 Bad Gateway"}, true},
+		{"http 520", &httpStatusError{code: 520, status: "520"}, true},
+		{"http 509", &httpStatusError{code: 509, status: "509 Bandwidth Limit"}, true},
+		{"http 403 fatal", &httpStatusError{code: 403, status: "403 Forbidden"}, false},
+		{"http 404 fatal", &httpStatusError{code: 404, status: "404 Not Found"}, false},
+		{"temporary_unavailable", errors.New("create_link failed: temporary_unavailable"), true},
+		{"nothing_to_play fatal", errors.New("create_link failed: nothing_to_play"), false},
+		{"limit fatal", errors.New("create_link failed: limit"), false},
+	}
+	for _, tc := range cases {
+		if got := isTransientCreateLinkError(tc.err); got != tc.want {
+			t.Errorf("%s: isTransientCreateLinkError = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestNewLinkRetriesTransient5xx verifies create_link retries a portal 5xx and
+// then succeeds, rather than failing the first attempt outright.
+func TestNewLinkRetriesTransient5xx(t *testing.T) {
+	var hits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if hits == 1 {
+			w.WriteHeader(http.StatusInternalServerError) // transient 500 on first try
+			return
+		}
+		w.Write([]byte(`{"js":{"cmd":"ffmpeg http://cdn.example/live/123","error":""}}`))
+	}))
+	defer server.Close()
+
+	p := &Portal{Location: server.URL}
+	c := &Channel{CMD: "test_channel", Portal: p}
+	link, err := c.NewLink(true)
+	if err != nil {
+		t.Fatalf("NewLink should recover from transient 500, got: %v", err)
+	}
+	if link != "http://cdn.example/live/123" {
+		t.Errorf("unexpected link %q", link)
+	}
+	if hits < 2 {
+		t.Errorf("expected a retry (>=2 create_link calls), got %d", hits)
 	}
 }
 

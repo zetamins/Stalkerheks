@@ -142,6 +142,19 @@ var httpRedirectClient = &http.Client{
 	},
 }
 
+// httpStatusError carries a non-2xx HTTP status from a portal request so
+// callers (e.g. create_link retry) can tell a transient 5xx upstream/CDN
+// hiccup apart from a fatal 4xx (auth, not-found).
+type httpStatusError struct {
+	link   string
+	status string
+	code   int
+}
+
+func (e *httpStatusError) Error() string {
+	return "Site '" + e.link + "' returned " + e.status
+}
+
 func (p *Portal) httpRequest(link string) ([]byte, error) {
 	resp, err := p.doHTTPRequest(link)
 	if err != nil {
@@ -150,7 +163,7 @@ func (p *Portal) httpRequest(link string) ([]byte, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, errors.New("Site '" + link + "' returned " + resp.Status)
+		return nil, &httpStatusError{link: link, status: resp.Status, code: resp.StatusCode}
 	}
 
 	contents, err := ioutil.ReadAll(resp.Body)

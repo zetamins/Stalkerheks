@@ -53,10 +53,11 @@ func (inst *Instance) handleContentUnknown(cr *ContentRequest) {
 		if err != nil {
 			// instanceResponse closes the body and reports a non-2xx
 			// status as an httpStatusError. A 458 ("device not
-			// prioritized") is transient — back off and re-resolve the
-			// link with a fresh play_token on the next attempt.
+			// prioritized") or a transient upstream/CDN 5xx (500, 509,
+			// 520, …) clears on retry — back off and re-resolve the link
+			// with a fresh play_token on the next attempt.
 			var se *httpStatusError
-			if errors.As(err, &se) && se.code == 458 && attempt < len(backoffs) {
+			if errors.As(err, &se) && (se.code == 458 || se.code >= 500) && attempt < len(backoffs) {
 				time.Sleep(backoffs[attempt])
 				continue
 			}
@@ -91,7 +92,7 @@ func (inst *Instance) handleContentHLS(cr *ContentRequest) {
 		link = cr.Channel.HLSLinkRoot + cr.Suffix
 	}
 
-	resp, err := instanceResponse(link, inst)
+	resp, err := retryingFetch(inst, link)
 	if err != nil {
 		http.Error(cr.ResponseWriter, "internal server error", http.StatusInternalServerError)
 		log.Println(err)
@@ -100,6 +101,32 @@ func (inst *Instance) handleContentHLS(cr *ContentRequest) {
 	defer resp.Body.Close()
 
 	inst.handleEstablishedContentHLS(cr, resp, link)
+}
+
+// retryingFetch fetches a CDN/stream link, retrying transient upstream
+// failures — HTTP 458 ("device not prioritized") and 5xx server/CDN errors
+// (500, 502, 503, 509, 520, …) — with a short backoff. It reuses the same
+// link: the play_token stays valid across a transient server hiccup, and the
+// unknown-type resolver (handleContentUnknown) is what re-mints links when a
+// fresh token is actually needed. Fatal errors (4xx, connection failures)
+// return immediately.
+func retryingFetch(inst *Instance, link string) (*http.Response, error) {
+	backoffs := []time.Duration{300 * time.Millisecond, 1 * time.Second, 2 * time.Second}
+	var resp *http.Response
+	var err error
+	for attempt := 0; attempt <= len(backoffs); attempt++ {
+		resp, err = instanceResponse(link, inst)
+		if err == nil {
+			return resp, nil
+		}
+		var se *httpStatusError
+		if errors.As(err, &se) && (se.code == 458 || se.code >= 500) && attempt < len(backoffs) {
+			time.Sleep(backoffs[attempt])
+			continue
+		}
+		return nil, err
+	}
+	return resp, err
 }
 
 func (inst *Instance) handleEstablishedContentHLS(cr *ContentRequest, resp *http.Response, link string) {
@@ -118,7 +145,7 @@ func (inst *Instance) handleEstablishedContentHLS(cr *ContentRequest, resp *http
 }
 
 func (inst *Instance) handleContentMedia(cr *ContentRequest) {
-	resp, err := instanceResponse(cr.Channel.Link, inst)
+	resp, err := retryingFetch(inst, cr.Channel.Link)
 	if err != nil {
 		http.Error(cr.ResponseWriter, "internal server error", http.StatusInternalServerError)
 		log.Println(err)
