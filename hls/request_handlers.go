@@ -8,24 +8,22 @@ import (
 )
 
 // Handles '/iptv' requests
-func playlistHandler(w http.ResponseWriter, r *http.Request) {
-	if !channelsAreReady() {
+func (inst *Instance) playlistHandler(w http.ResponseWriter, r *http.Request) {
+	if !inst.ChannelsReady() {
 		http.Error(w, "channels still loading, try again shortly", http.StatusServiceUnavailable)
 		return
 	}
 
-	// Snapshot titles+genres under the lock, then write outside it so a slow
-	// client can't block SetChannels.
-	playlistMu.RLock()
-	titles := make([]string, len(sortedChannels))
-	copy(titles, sortedChannels)
+	inst.playlistMu.RLock()
+	titles := make([]string, len(inst.sortedChannels))
+	copy(titles, inst.sortedChannels)
 	genres := make(map[string]string, len(titles))
 	for _, title := range titles {
-		if ch := playlist[title]; ch != nil {
+		if ch := inst.playlist[title]; ch != nil {
 			genres[title] = ch.Genre
 		}
 	}
-	playlistMu.RUnlock()
+	inst.playlistMu.RUnlock()
 
 	w.Header().Set("Content-Type", "audio/x-mpegurl; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -40,21 +38,19 @@ func playlistHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // Handles '/iptv/' requests
-func channelHandler(w http.ResponseWriter, r *http.Request) {
-	if !channelsAreReady() {
+func (inst *Instance) channelHandler(w http.ResponseWriter, r *http.Request) {
+	if !inst.ChannelsReady() {
 		http.Error(w, "channels still loading, try again shortly", http.StatusServiceUnavailable)
 		return
 	}
-	cr, err := getContentRequest(w, r, "/iptv/")
+	cr, err := inst.getContentRequest(w, r, "/iptv/")
 	if err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 
-	// Lock channel's mux
 	cr.ChannelRef.Mux.Lock()
 
-	// Keep track on channel access time
 	if err = cr.ChannelRef.validate(); err != nil {
 		cr.ChannelRef.Mux.Unlock()
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -62,28 +58,25 @@ func channelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle content
-	handleContent(cr)
+	inst.handleContent(cr)
 }
 
 // Handles '/logo/' requests
-func logoHandler(w http.ResponseWriter, r *http.Request) {
-	if !channelsAreReady() {
+func (inst *Instance) logoHandler(w http.ResponseWriter, r *http.Request) {
+	if !inst.ChannelsReady() {
 		http.Error(w, "channels still loading, try again shortly", http.StatusServiceUnavailable)
 		return
 	}
-	cr, err := getContentRequest(w, r, "/logo/")
+	cr, err := inst.getContentRequest(w, r, "/logo/")
 	if err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 
-	// Lock
 	cr.ChannelRef.Logo.Mux.Lock()
 
-	// Retrieve from Stalker middleware if no cache is present
 	if len(cr.ChannelRef.Logo.Cache) == 0 {
-		img, contentType, err := download(cr.ChannelRef.Logo.Link)
+		img, contentType, err := download(cr.ChannelRef.Logo.Link, inst.userAgentString())
 		if err != nil {
 			cr.ChannelRef.Logo.Mux.Unlock()
 			http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -94,10 +87,7 @@ func logoHandler(w http.ResponseWriter, r *http.Request) {
 		cr.ChannelRef.Logo.CacheContentType = contentType
 	}
 
-	// Create local copy so we don't need thread syncrhonization
 	logo := *cr.ChannelRef.Logo
-
-	// Unlock
 	cr.ChannelRef.Logo.Mux.Unlock()
 
 	w.Header().Set("Content-Type", logo.CacheContentType)

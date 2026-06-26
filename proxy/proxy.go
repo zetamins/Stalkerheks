@@ -20,75 +20,73 @@ import (
 	"github.com/erkexzcx/stalkerhek/stalker"
 )
 
-var (
+// Instance is a per-profile proxy server. Each profile gets its own Instance
+// so multiple profiles can serve proxy connections concurrently on different
+// ports without sharing device identity or channel state.
+type Instance struct {
+	config      *stalker.Config
 	destination string
+	randomHex   string
 
-	config *stalker.Config
-
-	channels map[string]*stalker.Channel
-
-	// channelsMu guards channels/channelsByTitle. They're populated by
-	// SetChannels (after the portal list is retrieved) while requestHandler and
-	// rewriteChannelListCmds read them, so access is synchronized — the
-	// listener now binds before channels exist.
-	channelsMu sync.RWMutex
-
-	// channelsByTitle indexes the same channels by title (name) rather than
-	// by their raw upstream "cmd" string. Needed because this operator's
-	// portal rotates the play_token embedded in "cmd" on every single
-	// get_all_channels fetch — matching by the exact cmd string captured at
-	// startup against a freshly-fetched list (or against whatever a client
-	// echoes back into create_link) would essentially never hit. Title is
-	// stable across fetches, so it's the reliable join key for both the
-	// channel-list cmd rewrite and create_link's fallback resolution.
+	channelsMu      sync.RWMutex
+	channels        map[string]*stalker.Channel
 	channelsByTitle map[string]*stalker.Channel
+
+	radioChannelsMu      sync.RWMutex
+	radioChannels        map[string]*stalker.RadioChannel
+	radioChannelsByTitle map[string]*stalker.RadioChannel
 
 	serverMu sync.Mutex
 	server   *http.Server
 
-	// perSTBMu is a map of per-client-IP mutexes. Requests from the same STB are
-	// serialized to avoid Cloudflare 520 errors from concurrent bursts. Different
-	// STBs use different mutexes so they don't block each other.
 	perSTBMu   sync.Mutex
-	perSTBLock = make(map[string]*sync.Mutex)
+	perSTBLock map[string]*sync.Mutex
+}
 
-	// randomHex is a persistent 32-char hex random used for handshake responses.
-	// Real portal generates a fresh random per handshake; we use a stable one so all
-	// STBs behind the proxy share the same random (and thus the same signature base).
-	randomHex string
-)
+// NewInstance creates a new proxy Instance configured for the given portal
+// config. The HLS bind is extracted from config to rewrite create_link URLs.
+func NewInstance(c *stalker.Config) *Instance {
+	link, err := url.Parse(c.Portal.Location)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	return &Instance{
+		config:           c,
+		destination:      link.Scheme + "://" + link.Host,
+		randomHex:        generateRandomHex(32),
+		channels:         make(map[string]*stalker.Channel),
+		channelsByTitle:  make(map[string]*stalker.Channel),
+		radioChannels:    make(map[string]*stalker.RadioChannel),
+		radioChannelsByTitle: make(map[string]*stalker.RadioChannel),
+		perSTBLock:       make(map[string]*sync.Mutex),
+	}
+}
 
 // lockSTB returns the mutex for a given client IP and locks it.
-// The caller must call unlockSTB to release.
-func lockSTB(clientIP string) {
-	perSTBMu.Lock()
-	mu, ok := perSTBLock[clientIP]
+func (inst *Instance) lockSTB(clientIP string) {
+	inst.perSTBMu.Lock()
+	mu, ok := inst.perSTBLock[clientIP]
 	if !ok {
 		mu = &sync.Mutex{}
-		perSTBLock[clientIP] = mu
+		inst.perSTBLock[clientIP] = mu
 	}
-	perSTBMu.Unlock()
+	inst.perSTBMu.Unlock()
 	mu.Lock()
 }
 
-func unlockSTB(clientIP string) {
-	perSTBMu.Lock()
-	mu := perSTBLock[clientIP]
-	perSTBMu.Unlock()
+func (inst *Instance) unlockSTB(clientIP string) {
+	inst.perSTBMu.Lock()
+	mu := inst.perSTBLock[clientIP]
+	inst.perSTBMu.Unlock()
 	if mu != nil {
 		mu.Unlock()
 	}
-}
-
-func init() {
-	randomHex = generateRandomHex(32)
 }
 
 // generateRandomHex returns a hex-encoded string of n random bytes.
 func generateRandomHex(n int) string {
 	b := make([]byte, n/2)
 	if _, err := rand.Read(b); err != nil {
-		// fallback in the astronomically unlikely event of crypto/rand failure
 		for i := range b {
 			b[i] = byte(i ^ 0xA5)
 		}
@@ -96,33 +94,20 @@ func generateRandomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// Serve installs the config and binds the proxy listener immediately — before
-// channels are loaded — so the port is reachable within milliseconds instead of
-// only after the (potentially minutes-long) portal handshake. Most requests are
-// forwarded to the real portal and work as soon as the listener is up;
-// create_link and the channel-list rewrite need the channel maps, which arrive
-// later via SetChannels. Blocks until Stop is called or the listener fails.
-func Serve(c *stalker.Config, bind string) {
-	config = c
-
-	// extract scheme://hostname:port from given URL, so we don't have to do it later
-	link, err := url.Parse(config.Portal.Location)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	destination = link.Scheme + "://" + link.Host
-
+// Serve binds the proxy listener and begins serving immediately — before
+// channels are loaded — so the port is reachable within milliseconds.
+func (inst *Instance) Serve(bind string) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/vod/", vodHandler)
-	mux.HandleFunc("/_weather/", weatherProxyHandler)
-	mux.HandleFunc("/_geo/", geoProxyHandler)
-	mux.HandleFunc("/_speedtest/", speedtestProxyHandler)
-	mux.HandleFunc("/", requestHandler)
+	mux.HandleFunc("/vod/", inst.vodHandler)
+	mux.HandleFunc("/_weather/", inst.weatherProxyHandler)
+	mux.HandleFunc("/_geo/", inst.geoProxyHandler)
+	mux.HandleFunc("/_speedtest/", inst.speedtestProxyHandler)
+	mux.HandleFunc("/", inst.requestHandler)
 
 	srv := &http.Server{Addr: bind, Handler: mux}
-	serverMu.Lock()
-	server = srv
-	serverMu.Unlock()
+	inst.serverMu.Lock()
+	inst.server = srv
+	inst.serverMu.Unlock()
 
 	log.Println("Proxy service listening on", bind)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -130,34 +115,45 @@ func Serve(c *stalker.Config, bind string) {
 	}
 }
 
-// SetChannels populates the channel lookup maps used by create_link and the
-// channel-list cmd rewrite. Safe to call after Serve has already started.
-// Channels are matched primarily by CMD field; chs is also kept title-keyed
-// (stalker.RetrieveChannels builds it that way) — see channelsByTitle.
-func SetChannels(chs map[string]*stalker.Channel) {
+// SetChannels populates the channel lookup maps for create_link and response
+// rewriting.
+func (inst *Instance) SetChannels(chs map[string]*stalker.Channel) {
 	newChannels := make(map[string]*stalker.Channel, len(chs))
 	for _, v := range chs {
 		newChannels[v.CMD] = v
 	}
-	channelsMu.Lock()
-	channels = newChannels
-	channelsByTitle = chs
-	channelsMu.Unlock()
+	inst.channelsMu.Lock()
+	inst.channels = newChannels
+	inst.channelsByTitle = chs
+	inst.channelsMu.Unlock()
 }
 
-// Stop gracefully shuts down the proxy HTTP server, if running. Safe to call
-// even if Start was never called or has already returned.
-func Stop() {
-	serverMu.Lock()
-	srv := server
-	server = nil
-	serverMu.Unlock()
+// SetRadioChannels populates the radio channel lookup maps.
+func (inst *Instance) SetRadioChannels(chs map[string]*stalker.RadioChannel) {
+	newByCMD := make(map[string]*stalker.RadioChannel, len(chs))
+	newByTitle := make(map[string]*stalker.RadioChannel, len(chs))
+	for _, v := range chs {
+		newByCMD[v.CMD] = v
+		newByTitle[v.Title] = v
+	}
+	inst.radioChannelsMu.Lock()
+	inst.radioChannels = newByCMD
+	inst.radioChannelsByTitle = newByTitle
+	inst.radioChannelsMu.Unlock()
+}
+
+// Stop gracefully shuts down the proxy HTTP server.
+func (inst *Instance) Stop() {
+	inst.serverMu.Lock()
+	srv := inst.server
+	inst.server = nil
+	inst.serverMu.Unlock()
 	if srv != nil {
 		srv.Shutdown(context.Background())
 	}
 }
 
-func requestHandler(w http.ResponseWriter, r *http.Request) {
+func (inst *Instance) requestHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println(r.RequestURI)
 
 	query := r.URL.Query()
@@ -177,24 +173,16 @@ func requestHandler(w http.ResponseWriter, r *http.Request) {
 		tagCMD = tmp[0]
 	}
 
-	// ################################################
-	// Ignore/fake some requests
-
-	// Handshake
+	// Handshake — fake it for downstream STBs
 	if tagAction == "handshake" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Set-Cookie", "PHPSESSID=null; path=/;")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"js":{"token":"` + config.Portal.Token + `","random":"` + randomHex + `","not_valid":0},"text":"generated in: 0.01s; query counter: 1; cache hits: 0; cache miss: 0; php errors: 0; sql errors: 0;"}`))
+		w.Write([]byte(`{"js":{"token":"` + inst.config.Portal.Token + `","random":"` + inst.randomHex + `","not_valid":0},"text":"generated in: 0.01s; query counter: 1; cache hits: 0; cache miss: 0; php errors: 0; sql errors: 0;"}`))
 		return
 	}
 
-	// Watchdog — forwarded to the portal so it knows the device's play state
-	// (cur_play_type). This is critical for maintaining stream priority/sessions.
-	// The portal's response is stripped of events before reaching the STB.
-	// No longer faked — goes through the normal forwarding path with response filtering.
-
-	// Log
+	// Log — fake it
 	if tagAction == "get_events" && tagType == "log" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
@@ -202,15 +190,7 @@ func requestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authentication
-	if tagAction == "do_auth" {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"js":true,"text":"array(2) {\n  [\"status\"]=>\n  string(2) \"OK\"\n  [\"results\"]=>\n  bool(true)\n}\ngenerated in: 1.033s; query counter: 7; cache hits: 0; cache miss: 0; php errors: 0; sql errors: 0;"}`))
-		return
-	}
-
-	// Logout
+	// Logout — fake it
 	if tagAction == "logout" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
@@ -218,94 +198,41 @@ func requestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Rewrite links — only intercept live TV (itv). VOD, karaoke, archive etc.
-	// use base64-encoded CMDs that must be forwarded to the real portal.
+	// ITV create_link — intercept and rewrite to HLS URL
 	if tagAction == "create_link" && (tagType == "itv" || tagType == "") {
-		if tagCMD == "" {
-			log.Println("STB requested 'create_link', but did not give 'cmd' key in URL query...")
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
+		inst.handleITVCreateLink(w, r, tagCMD)
+		return
+	}
 
-		// Find Stalker channel. tagCMD is usually the original upstream cmd
-		// string, but a compliant client may instead echo back whatever
-		// "cmd" it received from the already-rewritten channel list (see
-		// rewriteChannelListCmds) — an /iptv/<title> URL of our own, not
-		// the upstream's. Fall back to resolving by title in that case.
-		channelsMu.RLock()
-		channel, found := channels[tagCMD]
-		if !found {
-			if idx := strings.Index(tagCMD, "/iptv/"); idx >= 0 {
-				if title, err := url.PathUnescape(tagCMD[idx+len("/iptv/"):]); err == nil {
-					channel, found = channelsByTitle[title]
-				}
-			}
-		}
-		channelsMu.RUnlock()
-		if !found {
-			log.Println("STB requested 'create_link', but gave invalid CMD:", tagCMD)
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-
-		// We must give full path to IPTV stream. Deliberately a local var,
-		// not the package-level `destination` (the real portal's base URL,
-		// used by every other forwarded request below) — assigning into
-		// that here used to permanently clobber it after the first
-		// create_link call, misrouting every subsequent request for every
-		// client to the HLS port instead of the real portal.
-		requestHost, _, _ := net.SplitHostPort(r.Host)
-		_, portHLS, _ := net.SplitHostPort(config.HLS.Bind)
-		hlsURL := "http://" + requestHost + ":" + portHLS + "/iptv/" + url.PathEscape(channel.Title)
-
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-
-		responseText := generateNewChannelLink(hlsURL, channel.CMD_ID, channel.CMD_CH_ID)
-		w.Write([]byte(responseText))
-
-		fmt.Println(responseText)
-
+	// Radio create_link — intercept and rewrite to HLS URL
+	if tagAction == "create_link" && tagType == "radio" {
+		inst.handleRadioCreateLink(w, r, tagCMD)
 		return
 	}
 
 	// ################################################
-	// Rewrite URL query values — replace all device identifiers
-	// with the configured identity so the portal sees only one device.
+	// Rewrite URL query values with configured device identity
 
-	// Serial number
 	if _, exists := query["sn"]; exists {
-		query["sn"] = []string{config.Portal.SerialNumber}
+		query["sn"] = []string{inst.config.Portal.SerialNumber}
 	}
-
-	// Device ID
 	if _, exists := query["device_id"]; exists {
-		query["device_id"] = []string{config.Portal.DeviceID}
+		query["device_id"] = []string{inst.config.Portal.DeviceID}
 	}
-
-	// Device ID2
 	if _, exists := query["device_id2"]; exists {
-		query["device_id2"] = []string{config.Portal.DeviceID2}
+		query["device_id2"] = []string{inst.config.Portal.DeviceID2}
 	}
-
-	// Signature — keyed by randomHex (this proxy's own fabricated handshake
-	// random), matching how a real device recomputes this per-handshake
-	// rather than reusing one static value.
 	if _, exists := query["signature"]; exists {
-		query["signature"] = []string{buildSignature()}
+		query["signature"] = []string{inst.buildSignature()}
 	}
-
-	// STB type / model
 	if _, exists := query["stb_type"]; exists {
-		query["stb_type"] = []string{config.Portal.Model}
+		query["stb_type"] = []string{inst.config.Portal.Model}
 	}
 	if _, exists := query["model"]; exists {
-		query["model"] = []string{config.Portal.Model}
+		query["model"] = []string{inst.config.Portal.Model}
 	}
-
-	// Version strings
 	if _, exists := query["ver"]; exists {
-		query["ver"] = []string{buildVersion()}
+		query["ver"] = []string{inst.buildVersion()}
 	}
 	if _, exists := query["image_version"]; exists {
 		query["image_version"] = []string{"0x00000015"}
@@ -313,13 +240,9 @@ func requestHandler(w http.ResponseWriter, r *http.Request) {
 	if _, exists := query["hw_version"]; exists {
 		query["hw_version"] = []string{"1.0.00"}
 	}
-
-	// Metrics — JSON blob containing mac, sn, model, type, uid
 	if _, exists := query["metrics"]; exists {
-		query["metrics"] = []string{buildMetrics()}
+		query["metrics"] = []string{inst.buildMetrics()}
 	}
-
-	// Misc device parameters — set to safe defaults
 	if _, exists := query["video_out"]; exists {
 		query["video_out"] = []string{"hdmi"}
 	}
@@ -332,49 +255,40 @@ func requestHandler(w http.ResponseWriter, r *http.Request) {
 	if _, exists := query["hd"]; exists {
 		query["hd"] = []string{"1"}
 	}
-
-	// Hashes — computed with SHA-1 to match GetHashVersion1 behavior on real MAG boxes
 	if _, exists := query["hw_version_2"]; exists {
-		query["hw_version_2"] = []string{buildHWVersion2()}
+		query["hw_version_2"] = []string{inst.buildHWVersion2()}
 	}
 	if _, exists := query["api_signature"]; exists {
 		query["api_signature"] = []string{"256"}
 	}
 	if _, exists := query["prehash"]; exists {
-		query["prehash"] = []string{buildPrehash()}
+		query["prehash"] = []string{inst.buildPrehash()}
 	}
 
 	// ################################################
-	// Proxy modified request to real Stalker portal and return the response
+	// Proxy modified request to real portal
 
-	// Build (modified) URL
-	finalLink := destination + r.URL.Path
+	finalLink := inst.destination + r.URL.Path
 	if len(r.URL.RawQuery) != 0 {
 		finalLink += "?" + query.Encode()
 	}
 
-	// Serialize requests per STB (by client IP) to avoid Cloudflare 520 errors
-	// from concurrent bursts, while allowing different STBs to proceed in parallel.
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	queuedAt := time.Now()
-	lockSTB(clientIP)
+	inst.lockSTB(clientIP)
 	waited := time.Since(queuedAt)
-	defer unlockSTB(clientIP)
+	defer inst.unlockSTB(clientIP)
 
 	sentAt := time.Now()
-	resp, err := getRequestWithRetry(finalLink, r)
+	resp, err := getRequestWithRetry(finalLink, r, inst.config)
 	if err != nil {
 		log.Printf("ERROR forwarding %s after %v: %v", tagAction, time.Since(sentAt).Round(time.Millisecond), err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
-	// queue = time spent serialized behind this STB's other in-flight
-	// requests; upstream = time the real portal took to respond. Either being
-	// large is what makes the portal feel slow to load.
 	log.Printf("  -> %s status=%d size=%d queue=%v upstream=%v", tagAction, resp.StatusCode, resp.ContentLength, waited.Round(time.Millisecond), time.Since(sentAt).Round(time.Millisecond))
 
-	// Read response body so we can optionally modify it
 	bodyBytes, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -382,67 +296,33 @@ func requestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	body := string(bodyBytes)
 
-	// Force use_http_tmp_link=1 and use_load_balancing=1 in channel list responses
-	// so compliant STB firmware calls create_link (which we rewrite to HLS)
-	// instead of playing the embedded "cmd" URL directly. This only helps
-	// against clients that actually honor those flags, though — see below.
+	// Rewrite channel list responses
 	if tagAction == "get_all_channels" || tagAction == "get_all_fav_channels" || tagAction == "get_ordered_list" {
 		body = strings.ReplaceAll(body, `"use_http_tmp_link":"0"`, `"use_http_tmp_link":"1"`)
 		body = strings.ReplaceAll(body, `"use_http_tmp_link":0`, `"use_http_tmp_link":1`)
 		body = strings.ReplaceAll(body, `"use_load_balancing":"0"`, `"use_load_balancing":"1"`)
 		body = strings.ReplaceAll(body, `"use_load_balancing":0`, `"use_load_balancing":1`)
-
-		// The real portal's "cmd" field is already a fully-playable URL
-		// (e.g. "ffmpeg http://realhost/play/live.php?mac=<real-mac>&stream=..&play_token=..")
-		// exposing the real upstream server, the configured MAC, and a
-		// session token, directly. use_http_tmp_link/use_load_balancing
-		// only changes behavior on STB firmware that honors them — many
-		// third-party players (confirmed: TiviMate, STBEmu) recognize the
-		// "ffmpeg <url>" convention as already-resolved and play it
-		// straight away, skipping create_link (and therefore the HLS
-		// relay) entirely. That leaves channel playback fully independent
-		// of this proxy and leaks the real device identity to the
-		// upstream — confirmed live: with this proxy process killed
-		// outright, the raw "cmd" URL from this exact response was still
-		// directly streamable from the real CDN. So the "cmd" field itself
-		// must be rewritten here too, not just the flags.
 		requestHost, _, _ := net.SplitHostPort(r.Host)
-		body = rewriteChannelListCmds(body, requestHost)
+		body = inst.rewriteChannelListCmds(body, requestHost)
 		log.Printf("  -> %s body modified (forced tmp_link, cmd rewritten)", tagAction)
 	}
 
-	// For VOD/karaoke/archive create_link responses, rewrite the stream URL
-	// in the cmd field to route through our proxy so media traffic is tunneled.
+	// Rewrite VOD/karaoke/archive create_link responses
 	if tagAction == "create_link" && tagType != "itv" && tagType != "" {
-		body = rewriteVodResponse(body, r.Host)
+		body = inst.rewriteVodResponse(body, r.Host)
 	}
 
-	// Watchdog: forward to portal to maintain stream priority/sessions,
-	// but strip any portal-to-STB events (reboot, reload, messages, etc.)
-	// so the STB behind the proxy doesn't receive commands meant for the
-	// proxy's own device identity.
+	// Watchdog: forward, filter dangerous events
 	if tagAction == "get_events" && tagType == "watchdog" {
-		body = `{"js":{"data":{"msgs":0,"additional_services_on":"1"}},"text":"generated in: 0.01s; query counter: 4; cache hits: 0; cache miss: 0; php errors: 0; sql errors: 0;"}`
-		log.Printf("  -> watchdog forwarded, response filtered")
+		body = filterWatchdogEvents(body)
+		log.Printf("  -> watchdog forwarded, events filtered")
 	}
 
-	// Rewrite third-party service URLs in portal JS/HTML/CSS responses so
-	// weather, geo, and speed test requests go through the proxy instead of
-	// leaking the STB's real IP and device info to external services.
+	// Rewrite third-party service URLs
 	if strings.Contains(r.URL.Path, ".js") || strings.Contains(r.URL.Path, ".html") || r.URL.Path == "/c/" || r.URL.Path == "/" {
-		body = rewriteExternalURLs(body, r.Host)
+		body = inst.rewriteExternalURLs(body, r.Host)
 	}
 
-	// Send response — forward the real portal's headers but override Set-Cookie
-	// to keep STB browser cookie state clean.
-	//
-	// Writing bodyBytes (the original, pre-rewrite bytes) here instead of
-	// body (the rewritten string) was a real bug: every rewrite above —
-	// forcing use_http_tmp_link/use_load_balancing, stripping watchdog
-	// events, rewriting VOD/external URLs, and the channel-list cmd
-	// rewrite — computed a modified body and then this function discarded
-	// it and sent the client the unmodified original anyway. None of those
-	// rewrites were ever actually reaching clients.
 	addHeaders(resp.Header, w.Header())
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
 	w.Header().Set("Set-Cookie", "PHPSESSID=null; path=/;")
@@ -450,9 +330,77 @@ func requestHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(body))
 }
 
-// vodHandler reverse-proxies VOD media content. The STB requests
-// /vod/<base64url-encoded-target-url> and we fetch the real URL and stream it back.
-func vodHandler(w http.ResponseWriter, r *http.Request) {
+// handleITVCreateLink handles the ITV create_link interception.
+func (inst *Instance) handleITVCreateLink(w http.ResponseWriter, r *http.Request, tagCMD string) {
+	if tagCMD == "" {
+		log.Println("STB requested 'create_link', but did not give 'cmd' key in URL query...")
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	inst.channelsMu.RLock()
+	channel, found := inst.channels[tagCMD]
+	if !found {
+		if idx := strings.Index(tagCMD, "/iptv/"); idx >= 0 {
+			if title, err := url.PathUnescape(tagCMD[idx+len("/iptv/"):]); err == nil {
+				channel, found = inst.channelsByTitle[title]
+			}
+		}
+	}
+	inst.channelsMu.RUnlock()
+	if !found {
+		log.Println("STB requested 'create_link', but gave invalid CMD:", tagCMD)
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	requestHost, _, _ := net.SplitHostPort(r.Host)
+	_, portHLS, _ := net.SplitHostPort(inst.config.HLS.Bind)
+	hlsURL := "http://" + requestHost + ":" + portHLS + "/iptv/" + url.PathEscape(channel.Title)
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	responseText := generateNewChannelLink(hlsURL, channel.CMD_ID, channel.CMD_CH_ID)
+	w.Write([]byte(responseText))
+	fmt.Println(responseText)
+}
+
+// handleRadioCreateLink handles the radio create_link interception.
+func (inst *Instance) handleRadioCreateLink(w http.ResponseWriter, r *http.Request, tagCMD string) {
+	if tagCMD == "" {
+		log.Println("STB requested radio 'create_link', but did not give 'cmd' key in URL query...")
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	inst.radioChannelsMu.RLock()
+	channel, found := inst.radioChannels[tagCMD]
+	if !found {
+		if idx := strings.Index(tagCMD, "/radio/"); idx >= 0 {
+			if title, err := url.PathUnescape(tagCMD[idx+len("/radio/"):]); err == nil {
+				channel, found = inst.radioChannelsByTitle[title]
+			}
+		}
+	}
+	inst.radioChannelsMu.RUnlock()
+	if !found {
+		log.Println("STB requested radio 'create_link', but gave invalid CMD:", tagCMD)
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	requestHost, _, _ := net.SplitHostPort(r.Host)
+	_, portHLS, _ := net.SplitHostPort(inst.config.HLS.Bind)
+	hlsURL := "http://" + requestHost + ":" + portHLS + "/iptv/" + url.PathEscape(channel.Title)
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	responseText := generateNewChannelLink(hlsURL, "", "")
+	w.Write([]byte(responseText))
+}
+
+// vodHandler reverse-proxies VOD media content.
+func (inst *Instance) vodHandler(w http.ResponseWriter, r *http.Request) {
 	encoded := strings.TrimPrefix(r.URL.Path, "/vod/")
 	if encoded == "" {
 		http.Error(w, "missing target URL", http.StatusBadRequest)
@@ -473,13 +421,10 @@ func vodHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send device-identifying headers — the streaming server uses these
-	// for device recognition and stream priority assignment.
-	req.Header.Set("Mac", config.Portal.MAC)
-	req.Header.Set("Model", config.Portal.Model)
-	req.Header.Set("X-Hash", buildPrehash()) // same hash sent by real MAG STBs
+	req.Header.Set("Mac", inst.config.Portal.MAC)
+	req.Header.Set("Model", inst.config.Portal.Model)
+	req.Header.Set("X-Hash", inst.buildPrehash())
 
-	// Forward range headers so seeking works
 	if rng := r.Header.Get("Range"); rng != "" {
 		req.Header.Set("Range", rng)
 	}
@@ -492,7 +437,6 @@ func vodHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Copy response headers (Content-Type, Content-Length, Accept-Ranges, etc.)
 	for k, v := range resp.Header {
 		if k == "Set-Cookie" {
 			continue
@@ -503,12 +447,9 @@ func vodHandler(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-// rewriteVodResponse rewrites the stream URL in a VOD create_link JSON response
-// to route through the /vod/ proxy endpoint.
-func rewriteVodResponse(body string, requestHost string) string {
-	// The portal response has "cmd":"ffmpeg http://..." or "cmd":"http://..."
-	// Find the URL portion and replace with our proxied version.
-	// Look for "cmd":"<stuff>" and replace any http:// URL inside with /vod/<base64>
+// rewriteVodResponse rewrites the stream URL in a create_link response to
+// route through the /vod/ proxy endpoint.
+func (inst *Instance) rewriteVodResponse(body, requestHost string) string {
 	prefixes := []string{`"cmd":"ffmpeg `, `"cmd":"`}
 	for _, prefix := range prefixes {
 		idx := strings.Index(body, prefix)
@@ -516,23 +457,15 @@ func rewriteVodResponse(body string, requestHost string) string {
 			continue
 		}
 		start := idx + len(prefix)
-		// Find the end of the URL: the JSON string's closing quote or a space
-		// separator. Backslash is deliberately NOT a terminator — the cmd value
-		// is JSON-escaped (http:\/\/host\/path), so stopping at the first '\'
-		// truncated the URL to "http:" and produced a garbage /vod/ link.
 		end := strings.IndexAny(body[start:], ` "`)
 		if end < 0 {
 			end = len(body) - start
 		}
 		originalURL := body[start : start+end]
-		// originalURL is still JSON-escaped; decode the escapes before using it
-		// as a real URL to fetch and base64-encode.
 		decodedURL := unescapeJSONString(originalURL)
 		if strings.HasPrefix(decodedURL, "http") {
 			encoded := base64.URLEncoding.EncodeToString([]byte(decodedURL))
-			// The STB's command format: "ffmpeg http://<host>/vod/<encoded>"
 			newURL := "http://" + requestHost + "/vod/" + encoded
-			// Replace in the original prefix format
 			if strings.HasPrefix(prefix, `"cmd":"ffmpeg `) {
 				body = strings.Replace(body,
 					`"cmd":"ffmpeg `+originalURL,
@@ -549,10 +482,163 @@ func rewriteVodResponse(body string, requestHost string) string {
 	return body
 }
 
-// jsonStringField extracts the value of the next `"key":"value"` occurrence
-// in body at or after offset i, respecting JSON backslash escapes. Returns
-// the raw (still-escaped) value, its unescaped form, and the offset just
-// past the closing quote — or ok=false if key doesn't occur again.
+// rewriteChannelListCmds rewrites channel "cmd" fields to HLS relay URLs.
+func (inst *Instance) rewriteChannelListCmds(body, requestHost string) string {
+	_, portHLS, _ := net.SplitHostPort(inst.config.HLS.Bind)
+
+	inst.channelsMu.RLock()
+	defer inst.channelsMu.RUnlock()
+
+	var sb strings.Builder
+	sb.Grow(len(body))
+	i := 0
+	for {
+		nameRaw, name, afterName, ok := jsonStringField(body, "name", i)
+		if !ok {
+			sb.WriteString(body[i:])
+			break
+		}
+		cmdRaw, _, afterCmd, ok := jsonStringField(body, "cmd", afterName)
+		if !ok {
+			sb.WriteString(body[i:])
+			break
+		}
+
+		channel, found := inst.channelsByTitle[name]
+		if !found {
+			if id, idOK := lastJSONStringFieldBefore(body, "id", afterName-len(nameRaw)); idOK {
+				channel, found = inst.channelsByTitle[name+" ("+id+")"]
+			}
+		}
+		if !found {
+			sb.WriteString(body[i:afterCmd])
+			i = afterCmd
+			continue
+		}
+
+		newURL := "http://" + requestHost + ":" + portHLS + "/iptv/" + url.PathEscape(channel.Title)
+		replacement := newURL
+		if strings.HasPrefix(strings.ReplaceAll(cmdRaw, `\/`, `/`), "ffmpeg ") {
+			replacement = "ffmpeg " + newURL
+		}
+
+		valueStart := afterCmd - len(cmdRaw)
+		sb.WriteString(body[i:valueStart])
+		sb.WriteString(specialLinkEscape(replacement))
+		i = afterCmd
+	}
+	return sb.String()
+}
+
+// rewriteExternalURLs replaces third-party service URLs with proxy endpoints.
+func (inst *Instance) rewriteExternalURLs(body, host string) string {
+	rules := []struct{ from, to string }{
+		{"http://weather.infomir.com.ua/", "http://" + host + "/_weather/"},
+		{"http://nominatim.openstreetmap.org/", "http://" + host + "/_geo/"},
+		{"https://update.infomir.com/speedtest/", "http://" + host + "/_speedtest/"},
+	}
+	for _, r := range rules {
+		body = strings.ReplaceAll(body, r.from, r.to)
+	}
+	return body
+}
+
+// weatherProxyHandler reverse-proxies weather service requests.
+func (inst *Instance) weatherProxyHandler(w http.ResponseWriter, r *http.Request) {
+	target := "http://weather.infomir.com.ua" + strings.TrimPrefix(r.URL.Path, "/_weather")
+	if r.URL.RawQuery != "" {
+		q := r.URL.Query()
+		if _, ok := q["mac"]; ok {
+			q.Set("mac", inst.config.Portal.MAC)
+		}
+		if _, ok := q["sn"]; ok {
+			q.Set("sn", inst.config.Portal.SerialNumber)
+		}
+		if _, ok := q["id"]; ok {
+			q.Set("id", inst.config.Portal.Model)
+		}
+		target += "?" + q.Encode()
+	}
+	log.Printf("Weather proxy: %s", target)
+	req, _ := http.NewRequest("GET", target, nil)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		http.Error(w, "weather service error", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	for k, v := range resp.Header {
+		if k != "Set-Cookie" {
+			w.Header()[k] = v
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+// geoProxyHandler proxies OpenStreetMap geocoding requests.
+func (inst *Instance) geoProxyHandler(w http.ResponseWriter, r *http.Request) {
+	target := "http://nominatim.openstreetmap.org" + strings.TrimPrefix(r.URL.Path, "/_geo")
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	log.Printf("Geo proxy: %s", target)
+	req, _ := http.NewRequest("GET", target, nil)
+	req.Header.Set("User-Agent", inst.config.Portal.UserAgent())
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		http.Error(w, "geo service error", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	for k, v := range resp.Header {
+		if k != "Set-Cookie" {
+			w.Header()[k] = v
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+// speedtestProxyHandler proxies speed test configuration requests.
+func (inst *Instance) speedtestProxyHandler(w http.ResponseWriter, r *http.Request) {
+	target := "https://update.infomir.com/speedtest" + strings.TrimPrefix(r.URL.Path, "/_speedtest")
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	log.Printf("Speedtest proxy: %s", target)
+	req, _ := http.NewRequest("GET", target, nil)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		http.Error(w, "speedtest service error", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	for k, v := range resp.Header {
+		if k != "Set-Cookie" {
+			w.Header()[k] = v
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+// buildMetrics, buildVersion, buildPrehash, buildHWVersion2, buildSignature
+// delegate to the configured portal's shared implementations.
+func (inst *Instance) buildMetrics() string  { return inst.config.Portal.Metrics() }
+func (inst *Instance) buildVersion() string  { return inst.config.Portal.VersionString() }
+func (inst *Instance) buildPrehash() string  { return inst.config.Portal.Prehash() }
+func (inst *Instance) buildHWVersion2() string { return inst.config.Portal.HWVersion2() }
+func (inst *Instance) buildSignature() string {
+	if inst.config.Portal.Signature != "" {
+		return inst.config.Portal.Signature
+	}
+	return inst.config.Portal.GetUID(inst.randomHex)
+}
+
+// ####################################################
+// Package-level utility functions (stateless)
+
 func jsonStringField(body, key string, i int) (raw, unescaped string, next int, ok bool) {
 	marker := `"` + key + `":"`
 	idx := strings.Index(body[i:], marker)
@@ -578,13 +664,6 @@ func jsonStringField(body, key string, i int) (raw, unescaped string, next int, 
 	return raw, unescapeJSONString(raw), end, true
 }
 
-// unescapeJSONString decodes a JSON string's escape sequences (\uXXXX,
-// \", \\, \/, \n, etc.) properly, by handing it to encoding/json rather
-// than hand-rolling it. A plain strings.ReplaceAll(raw, `\/`, `/`) here
-// previously missed \uXXXX entirely — channel names with non-ASCII
-// characters (confirmed: ~7% of one real operator's list, e.g. "ᴿᴬᵂ"
-// stylized text) never matched stalker.Channel's properly-decoded map
-// key, so those channels' cmd fields were silently left unrewritten.
 func unescapeJSONString(raw string) string {
 	var s string
 	if err := json.Unmarshal([]byte(`"`+raw+`"`), &s); err != nil {
@@ -593,14 +672,6 @@ func unescapeJSONString(raw string) string {
 	return s
 }
 
-// lastJSONStringFieldBefore finds the closest `"key":"value"` occurrence
-// ending at or before offset, searching backward. Used to recover a
-// channel's "id" field given the position of its "name" field: per the
-// real portal's field order ("id" immediately precedes "name" within each
-// channel object), the closest preceding "id" belongs to the same object,
-// whereas scanning forward from the start of the whole body risks matching
-// a *different* channel's "id" (e.g. one nested inside the previous
-// channel's "cmds" sub-array) instead.
 func lastJSONStringFieldBefore(body, key string, before int) (unescaped string, ok bool) {
 	marker := `"` + key + `":"`
 	idx := strings.LastIndex(body[:before], marker)
@@ -622,82 +693,6 @@ func lastJSONStringFieldBefore(body, key string, before int) (unescaped string, 
 	return unescapeJSONString(body[start:end]), true
 }
 
-// rewriteChannelListCmds rewrites every channel's raw "cmd" field in a
-// get_all_channels/get_all_fav_channels/get_ordered_list response so it
-// points at our own HLS relay instead of exposing the real upstream's
-// directly-playable URL (which embeds the real MAC and a session token —
-// confirmed independently streamable straight from the real CDN with this
-// proxy not even running).
-//
-// Matches each channel object by its "name" field, not by "cmd" itself:
-// this operator's portal rotates the play_token inside "cmd" on every
-// single fetch, so matching the live list against the channels map (built
-// from a one-time startup snapshot) by exact cmd string would essentially
-// never hit. "name" is stable, present in every channel object right
-// alongside "cmd", and is exactly how stalker.Channel keys its own channel
-// map (see channelsByTitle) — except for channels whose name collided with
-// another channel's at snapshot time, which RetrieveChannels disambiguates
-// as "name (id)"; this falls back to that same composite key, built from
-// the live response's own "id" field, when the plain name misses.
-func rewriteChannelListCmds(body, requestHost string) string {
-	_, portHLS, _ := net.SplitHostPort(config.HLS.Bind)
-
-	// Held for the whole scan: pure string work, no I/O, many map lookups.
-	channelsMu.RLock()
-	defer channelsMu.RUnlock()
-
-	var sb strings.Builder
-	sb.Grow(len(body))
-	i := 0
-	for {
-		nameRaw, name, afterName, ok := jsonStringField(body, "name", i)
-		if !ok {
-			sb.WriteString(body[i:])
-			break
-		}
-		cmdRaw, _, afterCmd, ok := jsonStringField(body, "cmd", afterName)
-		if !ok {
-			sb.WriteString(body[i:])
-			break
-		}
-
-		channel, found := channelsByTitle[name]
-		if !found {
-			// Use the raw (still JSON-escaped) length here, not the
-			// unescaped name's — they can differ (e.g. "\/" vs "/"), and
-			// this offset must line up with the actual bytes in body.
-			if id, idOK := lastJSONStringFieldBefore(body, "id", afterName-len(nameRaw)); idOK {
-				channel, found = channelsByTitle[name+" ("+id+")"]
-			}
-		}
-		if !found {
-			// Unmatched — a channel added upstream after our startup
-			// snapshot. Leave this one "cmd" as-is rather than guess, and
-			// keep scanning for the rest.
-			sb.WriteString(body[i:afterCmd])
-			i = afterCmd
-			continue
-		}
-
-		newURL := "http://" + requestHost + ":" + portHLS + "/iptv/" + url.PathEscape(channel.Title)
-		replacement := newURL
-		if strings.HasPrefix(strings.ReplaceAll(cmdRaw, `\/`, `/`), "ffmpeg ") {
-			replacement = "ffmpeg " + newURL
-		}
-
-		// afterCmd points at "cmd"'s closing quote (not yet consumed); the
-		// value itself starts right after the opening quote, at
-		// afterCmd-len(cmdRaw). Write up through that opening quote, then
-		// the rewritten value, then resume scanning from the closing quote
-		// onward (so it's preserved by the next iteration's leading slice).
-		valueStart := afterCmd - len(cmdRaw)
-		sb.WriteString(body[i:valueStart])
-		sb.WriteString(specialLinkEscape(replacement))
-		i = afterCmd
-	}
-	return sb.String()
-}
-
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -705,97 +700,83 @@ func min(a, b int) int {
 	return b
 }
 
-// rewriteExternalURLs replaces third-party service URLs in portal JS/HTML
-// responses with proxy endpoints so device info doesn't leak to external services.
-func rewriteExternalURLs(body, host string) string {
-	rules := []struct{ from, to string }{
-		{"http://weather.infomir.com.ua/", "http://" + host + "/_weather/"},
-		{"http://nominatim.openstreetmap.org/", "http://" + host + "/_geo/"},
-		{"https://update.infomir.com/speedtest/", "http://" + host + "/_speedtest/"},
-	}
-	for _, r := range rules {
-		body = strings.ReplaceAll(body, r.from, r.to)
-	}
-	return body
+func generateNewChannelLink(link, id, chID string) string {
+	return `{"js":{"id":"` + id + `","cmd":"` + specialLinkEscape(link) + `","streamer_id":0,"link_id":` + chID + `,"load":0,"error":""},"text":"array(6) {\n  [\"id\"]=>\n  string(4) \"` + id + `\"\n  [\"cmd\"]=>\n  string(99) \"` + specialLinkEscape(link) + `\"\n  [\"streamer_id\"]=>\n  int(0)\n  [\"link_id\"]=>\n  int(` + chID + `)\n  [\"load\"]=>\n  int(0)\n  [\"error\"]=>\n  string(0) \"\"\n}\ngenerated in: 0.01s; query counter: 8; cache hits: 0; cache miss: 0; php errors: 0; sql errors: 0;"}`
 }
 
-// weatherProxyHandler reverse-proxies weather service requests through the proxy.
-// Rewrites device MAC/SN in query params to configured values.
-func weatherProxyHandler(w http.ResponseWriter, r *http.Request) {
-	target := "http://weather.infomir.com.ua" + strings.TrimPrefix(r.URL.Path, "/_weather")
-	if r.URL.RawQuery != "" {
-		q := r.URL.Query()
-		if _, ok := q["mac"]; ok {
-			q.Set("mac", config.Portal.MAC)
-		}
-		if _, ok := q["sn"]; ok {
-			q.Set("sn", config.Portal.SerialNumber)
-		}
-		if _, ok := q["id"]; ok {
-			q.Set("id", config.Portal.Model)
-		}
-		target += "?" + q.Encode()
-	}
-	log.Printf("Weather proxy: %s", target)
-	req, _ := http.NewRequest("GET", target, nil)
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		http.Error(w, "weather service error", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-	for k, v := range resp.Header {
-		if k != "Set-Cookie" {
-			w.Header()[k] = v
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+func specialLinkEscape(i string) string {
+	return strings.ReplaceAll(i, "/", "\\/")
 }
 
-// geoProxyHandler proxies OpenStreetMap Nominatim geocoding requests.
-func geoProxyHandler(w http.ResponseWriter, r *http.Request) {
-	target := "http://nominatim.openstreetmap.org" + strings.TrimPrefix(r.URL.Path, "/_geo")
-	if r.URL.RawQuery != "" {
-		target += "?" + r.URL.RawQuery
+// filterWatchdogEvents parses a watchdog response and strips dangerous portal
+// commands while allowing safe message events through.
+func filterWatchdogEvents(body string) string {
+	type eventData struct {
+		ID              int    `json:"id"`
+		Event           string `json:"event"`
+		Msg             string `json:"msg,omitempty"`
+		NeedConfirm     int    `json:"need_confirm"`
+		RebootAfterOk   int    `json:"reboot_after_ok"`
+		AutoHideTimeout int    `json:"auto_hide_timeout"`
+		Param1          string `json:"param1,omitempty"`
+		AdditionalOn    string `json:"additional_services_on"`
 	}
-	log.Printf("Geo proxy: %s", target)
-	req, _ := http.NewRequest("GET", target, nil)
-	req.Header.Set("User-Agent", config.Portal.UserAgent())
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		http.Error(w, "geo service error", http.StatusBadGateway)
-		return
+
+	type tmpStruct struct {
+		Js struct {
+			Data eventData `json:"data"`
+		} `json:"js"`
+		Text string `json:"text"`
 	}
-	defer resp.Body.Close()
-	for k, v := range resp.Header {
-		if k != "Set-Cookie" {
-			w.Header()[k] = v
-		}
+
+	var tmp tmpStruct
+	if err := json.Unmarshal([]byte(body), &tmp); err != nil {
+		return `{"js":{"data":{"msgs":0,"additional_services_on":"1"}},"text":"generated in: 0.01s; query counter: 4; cache hits: 0; cache miss: 0; php errors: 0; sql errors: 0;"}`
 	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+
+	safeEvents := map[string]bool{
+		"send_msg": true, "send_msg_with_video": true, "show_menu": true,
+		"update_epg": true, "update_subscription": true, "update_channels": true,
+		"mount_all_storages": true, "play_channel": true, "play_radio_channel": true,
+	}
+
+	event := tmp.Js.Data.Event
+	if event == "" || safeEvents[event] {
+		return body
+	}
+
+	log.Printf("  -> filtered dangerous watchdog event: %s", event)
+	return `{"js":{"data":{"msgs":0,"additional_services_on":"1"}},"text":"generated in: 0.01s; query counter: 4; cache hits: 0; cache miss: 0; php errors: 0; sql errors: 0;"}`
 }
 
-// speedtestProxyHandler proxies speed test configuration requests.
-func speedtestProxyHandler(w http.ResponseWriter, r *http.Request) {
-	target := "https://update.infomir.com/speedtest" + strings.TrimPrefix(r.URL.Path, "/_speedtest")
-	if r.URL.RawQuery != "" {
-		target += "?" + r.URL.RawQuery
+// ####################################################
+// Backward-compatible package-level API
+
+var defaultInstance *Instance
+
+// Serve binds the default proxy instance on the given address.
+func Serve(c *stalker.Config, bind string) {
+	defaultInstance = NewInstance(c)
+	defaultInstance.Serve(bind)
+}
+
+// SetChannels populates the default proxy instance channel maps.
+func SetChannels(chs map[string]*stalker.Channel) {
+	if defaultInstance != nil {
+		defaultInstance.SetChannels(chs)
 	}
-	log.Printf("Speedtest proxy: %s", target)
-	req, _ := http.NewRequest("GET", target, nil)
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		http.Error(w, "speedtest service error", http.StatusBadGateway)
-		return
+}
+
+// SetRadioChannels populates the default proxy instance radio channel maps.
+func SetRadioChannels(chs map[string]*stalker.RadioChannel) {
+	if defaultInstance != nil {
+		defaultInstance.SetRadioChannels(chs)
 	}
-	defer resp.Body.Close()
-	for k, v := range resp.Header {
-		if k != "Set-Cookie" {
-			w.Header()[k] = v
-		}
+}
+
+// Stop shuts down the default proxy instance.
+func Stop() {
+	if defaultInstance != nil {
+		defaultInstance.Stop()
 	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
 }

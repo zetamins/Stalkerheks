@@ -9,33 +9,30 @@ import (
 	"strings"
 )
 
-func handleContent(cr *ContentRequest) {
+func (inst *Instance) handleContent(cr *ContentRequest) {
 	linkType := cr.ChannelRef.LinkType
 
 	if linkType == linkTypeUnknown {
-		handleContentUnknown(cr)
+		inst.handleContentUnknown(cr)
 		return
 	}
 
-	// At this point we will no longer modify channel details, so we get a copy of 'ChannelRef'
-	// value and set to 'Channel' so we can avoid synchronization
+	// Snapshot channel value so we can release the lock
 	cr.Channel = *cr.ChannelRef
 	cr.ChannelRef.Mux.Unlock()
 
 	switch linkType {
 	case linkTypeHLS:
-		handleContentHLS(cr)
+		inst.handleContentHLS(cr)
 	case linkTypeMedia:
-		handleContentMedia(cr)
+		inst.handleContentMedia(cr)
 	default:
 		http.Error(cr.ResponseWriter, "invalid media type", http.StatusInternalServerError)
 	}
 }
 
-// ####################################################
-
-func handleContentUnknown(cr *ContentRequest) {
-	resp, err := response(cr.ChannelRef.Link)
+func (inst *Instance) handleContentUnknown(cr *ContentRequest) {
+	resp, err := instanceResponse(cr.ChannelRef.Link, inst)
 	if err != nil {
 		cr.ChannelRef.Mux.Unlock()
 		http.Error(cr.ResponseWriter, "internal server error", http.StatusInternalServerError)
@@ -47,19 +44,15 @@ func handleContentUnknown(cr *ContentRequest) {
 	cr.ChannelRef.LinkType = getLinkType(resp.Header.Get("Content-Type"))
 
 	if cr.ChannelRef.LinkType == linkTypeHLS {
-		// Initiate new HLS channel
 		cr.ChannelRef.HLSLink = resp.Request.URL.String()
 		cr.ChannelRef.HLSLinkRoot = deleteAfterLastSlash(cr.ChannelRef.HLSLink)
-		// Start keep-alive refreshes to maintain stream session priority
 		cr.ChannelRef.startKeepAlive()
 	}
 
-	handleContent(cr)
+	inst.handleContent(cr)
 }
 
-// ####################################################
-
-func handleContentHLS(cr *ContentRequest) {
+func (inst *Instance) handleContentHLS(cr *ContentRequest) {
 	var link string
 	if cr.Suffix == "" {
 		link = cr.Channel.HLSLink
@@ -67,7 +60,7 @@ func handleContentHLS(cr *ContentRequest) {
 		link = cr.Channel.HLSLinkRoot + cr.Suffix
 	}
 
-	resp, err := response(link)
+	resp, err := instanceResponse(link, inst)
 	if err != nil {
 		http.Error(cr.ResponseWriter, "internal server error", http.StatusInternalServerError)
 		log.Println(err)
@@ -75,28 +68,26 @@ func handleContentHLS(cr *ContentRequest) {
 	}
 	defer resp.Body.Close()
 
-	handleEstablishedContentHLS(cr, resp, link)
+	inst.handleEstablishedContentHLS(cr, resp, link)
 }
 
-func handleEstablishedContentHLS(cr *ContentRequest, resp *http.Response, link string) {
+func (inst *Instance) handleEstablishedContentHLS(cr *ContentRequest, resp *http.Response, link string) {
 	prefix := "http://" + cr.Request.Host + "/iptv/" + url.PathEscape(cr.Title) + "/"
 
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 	switch {
-	case contentType == "application/vnd.apple.mpegurl" || contentType == "application/x-mpegurl": // HLS metadata
+	case contentType == "application/vnd.apple.mpegurl" || contentType == "application/x-mpegurl":
 		content := rewriteLinks(&resp.Body, prefix, cr.Channel.HLSLinkRoot)
 		addHeaders(resp.Header, cr.ResponseWriter.Header(), false)
 		cr.ResponseWriter.WriteHeader(http.StatusOK)
 		fmt.Fprint(cr.ResponseWriter, content)
-	default: // media (or anything else)
-		handleEstablishedContentMedia(cr, resp)
+	default:
+		inst.handleEstablishedContentMedia(cr, resp)
 	}
 }
 
-// ####################################################
-
-func handleContentMedia(cr *ContentRequest) {
-	resp, err := response(cr.Channel.Link)
+func (inst *Instance) handleContentMedia(cr *ContentRequest) {
+	resp, err := instanceResponse(cr.Channel.Link, inst)
 	if err != nil {
 		http.Error(cr.ResponseWriter, "internal server error", http.StatusInternalServerError)
 		log.Println(err)
@@ -104,10 +95,10 @@ func handleContentMedia(cr *ContentRequest) {
 	}
 	defer resp.Body.Close()
 
-	handleEstablishedContentMedia(cr, resp)
+	inst.handleEstablishedContentMedia(cr, resp)
 }
 
-func handleEstablishedContentMedia(cr *ContentRequest, resp *http.Response) {
+func (inst *Instance) handleEstablishedContentMedia(cr *ContentRequest, resp *http.Response) {
 	addHeaders(resp.Header, cr.ResponseWriter.Header(), true)
 	cr.ResponseWriter.WriteHeader(resp.StatusCode)
 	io.Copy(cr.ResponseWriter, resp.Body)

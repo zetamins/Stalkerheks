@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -213,4 +214,289 @@ func (p *Portal) getGenres() (map[string]string, error) {
 	}
 
 	return genres, nil
+}
+
+// ####################################################
+// Radio Channels
+
+// RetrieveRadioChannels retrieves all radio channels from the portal.
+func (p *Portal) RetrieveRadioChannels() (map[string]*RadioChannel, error) {
+	type tmpStruct struct {
+		Js struct {
+			Data []struct {
+				ID     string `json:"id"`
+				Name   string `json:"name"`
+				Cmd    string `json:"cmd"`
+				Number string `json:"number"`
+			} `json:"data"`
+		} `json:"js"`
+	}
+	var tmp tmpStruct
+
+	content, err := p.httpRequest(p.Location + "?type=radio&action=get_ordered_list&JsHttpRequest=1-xml")
+	if err != nil {
+		return nil, err
+	}
+
+	if err := json.Unmarshal(content, &tmp); err != nil {
+		log.Println("Failed to parse radio channel list:", err)
+		return nil, err
+	}
+
+	channels := make(map[string]*RadioChannel, len(tmp.Js.Data))
+	for _, v := range tmp.Js.Data {
+		title := v.Name
+		if _, exists := channels[title]; exists {
+			title = v.Name + " (" + v.ID + ")"
+		}
+		channels[title] = &RadioChannel{
+			Title:  title,
+			CMD:    v.Cmd,
+			Portal: p,
+		}
+	}
+	return channels, nil
+}
+
+// NewLink retrieves a playable URL for a radio channel.
+func (c *RadioChannel) NewLink(retry bool) (string, error) {
+	attempts := 1
+	if retry {
+		attempts = createLinkMaxAttempts
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		link, err := c.newLinkOnce()
+		if err == nil {
+			return link, nil
+		}
+		lastErr = err
+		if !retry || !isTransientCreateLinkError(err) || attempt == attempts {
+			break
+		}
+		log.Println("radio create_link transient failure, retrying:", err)
+		time.Sleep(createLinkRetryDelay)
+	}
+	return "", lastErr
+}
+
+func (c *RadioChannel) newLinkOnce() (string, error) {
+	type tmpStruct struct {
+		Js struct {
+			Cmd   string `json:"cmd"`
+			Error string `json:"error"`
+		} `json:"js"`
+	}
+	var tmp tmpStruct
+
+	link := c.Portal.Location + "?action=create_link&type=radio&cmd=" + url.PathEscape(c.CMD) + "&JsHttpRequest=1-xml"
+	content, err := c.Portal.httpRequest(link)
+	if err != nil {
+		return "", err
+	}
+
+	if err := json.Unmarshal(content, &tmp); err != nil {
+		return "", err
+	}
+
+	if tmp.Js.Error != "" {
+		return "", errors.New("radio create_link failed: " + tmp.Js.Error)
+	}
+	if tmp.Js.Cmd == "" {
+		return "", errors.New("radio create_link returned empty command")
+	}
+
+	strs := strings.Split(tmp.Js.Cmd, " ")
+	return strs[len(strs)-1], nil
+}
+
+// ####################################################
+// Video on Demand (VOD)
+
+// GetVODCategories retrieves the VOD category list from the portal.
+func (p *Portal) GetVODCategories() ([]VODCategory, error) {
+	type tmpStruct struct {
+		Js []struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+			Alias string `json:"alias"`
+		} `json:"js"`
+	}
+	var tmp tmpStruct
+
+	content, err := p.httpRequest(p.Location + "?type=vod&action=get_categories&JsHttpRequest=1-xml")
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(content, &tmp); err != nil {
+		return nil, err
+	}
+
+	cats := make([]VODCategory, 0, len(tmp.Js))
+	for _, v := range tmp.Js {
+		cats = append(cats, VODCategory{ID: v.ID, Title: v.Title, Alias: v.Alias})
+	}
+	return cats, nil
+}
+
+// GetVODOrderedList retrieves paginated VOD items optionally filtered by category.
+func (p *Portal) GetVODOrderedList(categoryID, sortBy string, page int) ([]VODItem, error) {
+	params := url.Values{}
+	params.Set("type", "vod")
+	params.Set("action", "get_ordered_list")
+	if categoryID != "" {
+		params.Set("category", categoryID)
+	}
+	if sortBy != "" {
+		params.Set("sortby", sortBy)
+	}
+	if page > 0 {
+		params.Set("p", strconv.Itoa(page))
+	}
+	params.Set("JsHttpRequest", "1-xml")
+
+	type tmpStruct struct {
+		Js struct {
+			Data []struct {
+				ID         string `json:"id"`
+				Name       string `json:"name"`
+				Cmd        string `json:"cmd"`
+				CategoryID string `json:"category_id"`
+				Year       string `json:"year"`
+				Director   string `json:"director"`
+				Screenshot string `json:"screenshot_uri"`
+				GenresStr  string `json:"genres_str"`
+				Rating     string `json:"rating_kinopoisk"`
+				Time       string `json:"time"`
+				IsMovie    string `json:"is_movie"`
+				SeasonID   string `json:"season_id"`
+				EpisodeID  string `json:"episode_id"`
+			} `json:"data"`
+		} `json:"js"`
+	}
+	var tmp tmpStruct
+
+	content, err := p.httpRequest(p.Location + "?" + params.Encode())
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(content, &tmp); err != nil {
+		return nil, err
+	}
+
+	items := make([]VODItem, 0, len(tmp.Js.Data))
+	for _, v := range tmp.Js.Data {
+		items = append(items, VODItem{
+			ID: v.ID, Name: v.Name, CMD: v.Cmd,
+			CategoryID: v.CategoryID, Year: v.Year, Director: v.Director,
+			Screenshot: v.Screenshot, GenresStr: v.GenresStr,
+			Rating: v.Rating, Time: v.Time, IsMovie: v.IsMovie,
+			SeasonID: v.SeasonID, EpisodeID: v.EpisodeID, Portal: p,
+		})
+	}
+	return items, nil
+}
+
+// NewVODLink retrieves a playable URL for a VOD item.
+func (p *Portal) NewVODLink(cmd, series, forcedStorage string) (string, error) {
+	type tmpStruct struct {
+		Js struct {
+			Cmd   string `json:"cmd"`
+			Error string `json:"error"`
+		} `json:"js"`
+	}
+	var tmp tmpStruct
+
+	link := p.Location + "?action=create_link&type=vod&cmd=" + url.PathEscape(cmd)
+	if series != "" {
+		link += "&series=" + url.PathEscape(series)
+	}
+	if forcedStorage != "" {
+		link += "&forced_storage=" + url.PathEscape(forcedStorage)
+	}
+	link += "&JsHttpRequest=1-xml"
+
+	content, err := p.httpRequest(link)
+	if err != nil {
+		return "", err
+	}
+	if err := json.Unmarshal(content, &tmp); err != nil {
+		return "", err
+	}
+	if tmp.Js.Error != "" {
+		return "", errors.New("vod create_link failed: " + tmp.Js.Error)
+	}
+	if tmp.Js.Cmd == "" {
+		return "", errors.New("vod create_link returned empty command")
+	}
+	strs := strings.Split(tmp.Js.Cmd, " ")
+	return strs[len(strs)-1], nil
+}
+
+// ####################################################
+// Karaoke
+
+// RetrieveKaraokeList retrieves karaoke items from the portal.
+func (p *Portal) RetrieveKaraokeList() (map[string]*Channel, error) {
+	type tmpStruct struct {
+		Js struct {
+			Data []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+				Cmd  string `json:"cmd"`
+			} `json:"data"`
+		} `json:"js"`
+	}
+	var tmp tmpStruct
+
+	content, err := p.httpRequest(p.Location + "?type=karaoke&action=get_ordered_list&JsHttpRequest=1-xml")
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(content, &tmp); err != nil {
+		return nil, err
+	}
+
+	items := make(map[string]*Channel, len(tmp.Js.Data))
+	for _, v := range tmp.Js.Data {
+		title := v.Name
+		if _, exists := items[title]; exists {
+			title = v.Name + " (" + v.ID + ")"
+		}
+		items[title] = &Channel{
+			Title:  title,
+			CMD:    v.Cmd,
+			Portal: p,
+		}
+	}
+	return items, nil
+}
+
+// NewKaraokeLink retrieves a playable URL for a karaoke item.
+func (p *Portal) NewKaraokeLink(cmd string) (string, error) {
+	type tmpStruct struct {
+		Js struct {
+			Cmd   string `json:"cmd"`
+			Error string `json:"error"`
+		} `json:"js"`
+	}
+	var tmp tmpStruct
+
+	link := p.Location + "?action=create_link&type=karaoke&cmd=" + url.PathEscape(cmd) + "&JsHttpRequest=1-xml"
+	content, err := p.httpRequest(link)
+	if err != nil {
+		return "", err
+	}
+	if err := json.Unmarshal(content, &tmp); err != nil {
+		return "", err
+	}
+	if tmp.Js.Error != "" {
+		return "", errors.New("karaoke create_link failed: " + tmp.Js.Error)
+	}
+	if tmp.Js.Cmd == "" {
+		return "", errors.New("karaoke create_link returned empty command")
+	}
+	strs := strings.Split(tmp.Js.Cmd, " ")
+	return strs[len(strs)-1], nil
 }

@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// ContentRequest represents HTTP request that is received from the user
+// ContentRequest represents an HTTP request received from the viewer.
 type ContentRequest struct {
 	ResponseWriter http.ResponseWriter
 	Request        *http.Request
@@ -19,30 +19,28 @@ type ContentRequest struct {
 	Channel Channel
 }
 
-// Returns ContentRequest objected that contains HTTP request, its responseWriter and TV channel reference.
-func getContentRequest(w http.ResponseWriter, r *http.Request, expectedPrefix string) (*ContentRequest, error) {
+// getContentRequest parses an incoming HLS/logo request and resolves the
+// channel by title from the instance's playlist.
+func (inst *Instance) getContentRequest(w http.ResponseWriter, r *http.Request, expectedPrefix string) (*ContentRequest, error) {
 	reqPath := strings.Replace(r.URL.RequestURI(), expectedPrefix, "", 1)
 	reqPathParts := strings.SplitN(reqPath, "/", 2)
 	if len(reqPathParts) == 0 {
 		return nil, errors.New("bad request")
 	}
 
-	// Unescape channel title
 	var err error
 	reqPathParts[0], err = url.PathUnescape(reqPathParts[0])
 	if err != nil {
 		return nil, err
 	}
 
-	// Find channel reference (playlist is swapped wholesale by SetChannels).
-	playlistMu.RLock()
-	channelRef, ok := playlist[reqPathParts[0]]
-	playlistMu.RUnlock()
+	inst.playlistMu.RLock()
+	channelRef, ok := inst.playlist[reqPathParts[0]]
+	inst.playlistMu.RUnlock()
 	if !ok {
 		return nil, errors.New("bad request")
 	}
 
-	// /iptv/<channel>
 	if len(reqPathParts) == 1 {
 		return &ContentRequest{
 			ResponseWriter: w,
@@ -53,7 +51,6 @@ func getContentRequest(w http.ResponseWriter, r *http.Request, expectedPrefix st
 		}, nil
 	}
 
-	// /iptv/<channel>/<something_more>
 	return &ContentRequest{
 		ResponseWriter: w,
 		Request:        r,

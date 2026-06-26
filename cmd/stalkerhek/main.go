@@ -34,8 +34,7 @@ func main() {
 		log.Fatalln("Failed to load profile:", err)
 	}
 
-	// Connect to Stalker portal with retry — matches STB's DHCP/NTP wait behavior.
-	// The STB waits up to 30s for network; we retry up to 5 times with backoff.
+	// Connect to Stalker portal with retry
 	log.Println("Connecting to Stalker middleware...")
 	for attempt := 1; attempt <= 5; attempt++ {
 		err = c.Portal.Start()
@@ -61,11 +60,34 @@ func main() {
 		log.Fatalln("no IPTV channels retrieved from Stalker middleware. quitting...")
 	}
 
-	// Real STBs dispatch get_all_channels (and other loads) before their
-	// first watchdog send, so start the watchdog only after RetrieveChannels
-	// above, not as part of Portal.Start().
+	// Retrieve radio channels (non-fatal)
+	radioChannels, err := c.Portal.RetrieveRadioChannels()
+	if err != nil {
+		log.Println("Radio channels not available (continuing):", err)
+	}
+
+	// Create per-profile HLS and proxy instances for multi-profile isolation.
+	hlsInst := hls.NewInstance()
+	proxyInst := proxy.NewInstance(c)
+
 	if c.HLS.Enabled {
-		c.Portal.IsPlayingFunc = hls.IsPlaying
+		hlsInst.SetUserAgent(c.Portal.Model)
+		hlsInst.SetDeviceHeaders(c.Portal.MAC, c.Portal.Model, c.Portal.SerialNumber)
+		hlsInst.SetChannels(channels)
+		c.Portal.IsPlayingFunc = hlsInst.IsPlaying
+	}
+
+	if c.Proxy.Enabled {
+		proxyInst.SetChannels(channels)
+		if radioChannels != nil {
+			proxyInst.SetRadioChannels(radioChannels)
+		}
+	}
+
+	// Real STBs dispatch get_all_channels (and other loads) before their
+	// first watchdog send.
+	if c.HLS.Enabled {
+		c.Portal.IsPlayingFunc = hlsInst.IsPlaying
 	}
 	if err := c.Portal.StartWatchdog(); err != nil {
 		log.Fatalln("Failed to start watchdog:", err)
@@ -74,41 +96,43 @@ func main() {
 	var wg sync.WaitGroup
 
 	if c.HLS.Enabled {
-		hls.SetUserAgent(c.Portal.Model)
-		hls.SetDeviceHeaders(c.Portal.MAC, c.Portal.Model, c.Portal.SerialNumber)
-		hls.SetChannels(channels)
 		wg.Add(1)
 		go func() {
 			log.Println("Starting HLS service...")
-			hls.Serve(c.HLS.Bind)
+			hlsInst.Serve(c.HLS.Bind)
 			wg.Done()
 		}()
 	}
 
 	if c.Proxy.Enabled {
-		proxy.SetChannels(channels)
 		wg.Add(1)
 		go func() {
 			log.Println("Starting proxy service...")
-			proxy.Serve(c, c.Proxy.Bind)
+			proxyInst.Serve(c.Proxy.Bind)
 			wg.Done()
 		}()
 	}
 
 	if c.Dashboard.Enabled {
 		// Register this binary's own profile as running with a real stop
-		// function (stop watchdog/HLS/proxy) rather than a fake
-		// self-referencing process handle — stopping/deleting this profile
-		// from the dashboard UI must not Kill() this process's own PID.
+		// function rather than a fake self-referencing process handle.
 		dashboard.MarkRunning(*flagProfile, func() {
 			c.Portal.StopWatchdog()
 			if c.HLS.Enabled {
-				hls.Stop()
+				hlsInst.Stop()
 			}
 			if c.Proxy.Enabled {
-				proxy.Stop()
+				proxyInst.Stop()
 			}
 		})
+
+		// Also set the backward-compat defaults so the dashboard's
+		// package-level API (used by startProfileInProcess) works.
+		hls.SetChannels(channels)
+		proxy.SetChannels(channels)
+		if radioChannels != nil {
+			proxy.SetRadioChannels(radioChannels)
+		}
 
 		wg.Add(1)
 		go func() {

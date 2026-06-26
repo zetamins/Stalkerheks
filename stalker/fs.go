@@ -58,6 +58,73 @@ type Portal struct {
 	watchdogStop chan struct{} // closed by StopWatchdog to end the periodic goroutine
 }
 
+// Content type constants for create_link and retrieval APIs.
+const (
+	ContentTypeITV       = "itv"
+	ContentTypeRadio     = "radio"
+	ContentTypeVOD       = "vod"
+	ContentTypeKaraoke   = "karaoke"
+	ContentTypeTVArchive = "tv_archive"
+)
+
+// RadioChannel represents a radio station in the Stalker portal.
+type RadioChannel struct {
+	Title    string
+	CMD      string // channel's identifier for create_link
+	Portal   *Portal
+}
+
+// VODItem represents a Video-on-Demand catalog entry.
+type VODItem struct {
+	ID         string
+	Name       string
+	CMD        string // identifier for create_link
+	CategoryID string
+	Year       string
+	Director   string
+	Screenshot string
+	GenresStr  string
+	Rating     string
+	Time       string // duration
+	IsMovie    string // "1" if movie, "0" if series
+	SeasonID   string
+	EpisodeID  string
+	Portal     *Portal
+}
+
+// VODCategory represents a VOD category from the portal.
+type VODCategory struct {
+	ID    string
+	Title string
+	Alias string
+}
+
+// EPGEntry represents a single program in the EPG guide.
+type EPGEntry struct {
+	ID             string
+	CHID           string
+	Name           string
+	Descr          string
+	StartTimestamp int64
+	StopTimestamp  int64
+	StartTime      string // display time string
+	StopTime       string // display time string
+	MarkArchive    bool
+	MarkMemo       bool
+	MarkRec        bool
+}
+
+// EPGRecord represents EPG data for a channel within a time window.
+type EPGRecord struct {
+	CHID      string
+	CHName    string
+	CHType    string
+	Programs  []EPGEntry
+	FromTS    int64
+	ToTS      int64
+	TimeMarks []string
+}
+
 var regexMAC = regexp.MustCompile(`^[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}:[A-F0-9]{2}$`)
 var regexTimezone = regexp.MustCompile(`^[a-zA-Z]+/[a-zA-Z]+$`)
 

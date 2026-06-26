@@ -20,6 +20,10 @@ const maxPortalRedirects = 10
 
 // Start connects to stalker portal, reserves token, starts watchdog etc.
 func (p *Portal) Start() error {
+	// Best-effort NTP time sync before portal connection. Real STBs sync
+	// their clock on boot; a drifted clock is a detectable anomaly.
+	syncNTP()
+
 	// Reserve token in Stalker portal. Real STBs are provisioned with two
 	// portal URLs (portal1/portal2) and fail over to the second if the
 	// first is unreachable; mirror that here.
@@ -223,4 +227,96 @@ func (p *Portal) curPlayType() string {
 		return "1"
 	}
 	return "0"
+}
+
+// LogPlaybackITV logs that a TV channel was watched. Real STBs send this
+// after a percentage of the content has been played.
+func (p *Portal) LogPlaybackITV(channelID string) error {
+	_, err := p.httpRequest(p.Location + "?type=itv&action=set_played&itv_id=" + url.PathEscape(channelID) + "&JsHttpRequest=1-xml")
+	return err
+}
+
+// LogPlaybackVOD logs that a VOD item was watched.
+func (p *Portal) LogPlaybackVOD(videoID string) error {
+	_, err := p.httpRequest(p.Location + "?type=vod&action=set_played&video_id=" + url.PathEscape(videoID) + "&JsHttpRequest=1-xml")
+	return err
+}
+
+// LogStreamError reports a stream error (e.g. loading fail) to the portal.
+func (p *Portal) LogStreamError(chID, event string) error {
+	_, err := p.httpRequest(p.Location + "?type=stb&action=set_stream_error&ch_id=" + url.PathEscape(chID) + "&event=" + url.PathEscape(event) + "&JsHttpRequest=1-xml")
+	return err
+}
+
+// SetEndedVOD marks a VOD item as fully watched on the portal.
+func (p *Portal) SetEndedVOD(videoID string) error {
+	_, err := p.httpRequest(p.Location + "?type=vod&action=set_ended&video_id=" + url.PathEscape(videoID) + "&JsHttpRequest=1-xml")
+	return err
+}
+
+// SetNotEndedVOD marks a VOD item as partially watched (for resume).
+func (p *Portal) SetNotEndedVOD(videoID, series, endTime string) error {
+	params := url.Values{}
+	params.Set("type", "vod")
+	params.Set("action", "set_not_ended")
+	params.Set("video_id", videoID)
+	if series != "" {
+		params.Set("series", series)
+	}
+	params.Set("end_time", endTime)
+	params.Set("JsHttpRequest", "1-xml")
+	_, err := p.httpRequest(p.Location + "?" + params.Encode())
+	return err
+}
+
+// ntpServer is the NTP server used for time synchronization before portal
+// connection. Real STBs sync their clock via NTP on boot; a drifted clock
+// is a detectable anomaly (watchdog timestamps, handshake timing).
+const ntpServer = "pool.ntp.org:123"
+
+// ntpEpochDelta is the NTP epoch (1900-01-01) minus Unix epoch (1970-01-01)
+// in seconds, for converting between NTP and Unix timestamps.
+const ntpEpochDelta = 2208988800
+
+// syncNTP performs a best-effort NTP time query. On success, logs the offset
+// between the local clock and the NTP reference. Does not set the system clock
+// (requires root); the offset is informational and non-fatal.
+func syncNTP() {
+	conn, err := net.DialTimeout("udp", ntpServer, 5*time.Second)
+	if err != nil {
+		log.Println("NTP sync skipped (network not available):", err)
+		return
+	}
+	defer conn.Close()
+
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return
+	}
+
+	// NTP v4 client request packet (48 bytes):
+	// - byte 0: LI=0, VN=4, Mode=3 (client)
+	// - bytes 1-47: zeros (no optional fields needed for a basic query)
+	req := make([]byte, 48)
+	req[0] = 0x23 // 00 100 011 = Leap=0, Version=4, Mode=3
+
+	if _, err := conn.Write(req); err != nil {
+		log.Println("NTP query failed:", err)
+		return
+	}
+
+	resp := make([]byte, 48)
+	if _, err := conn.Read(resp); err != nil {
+		log.Println("NTP response failed:", err)
+		return
+	}
+
+	// Extract transmit timestamp (bytes 40-47): 32-bit integer seconds +
+	// 32-bit fractional seconds. Convert integer seconds to Unix time.
+	secs := int64(resp[40])<<24 | int64(resp[41])<<16 | int64(resp[42])<<8 | int64(resp[43])
+	if secs < ntpEpochDelta {
+		return // invalid timestamp
+	}
+	ntpTime := secs - ntpEpochDelta
+	offset := time.Duration(ntpTime-time.Now().Unix()) * time.Second
+	log.Printf("NTP sync: offset %v from %s", offset, ntpServer)
 }

@@ -40,13 +40,14 @@ var (
 
 	// configsByName/channelsByName are keyed by profile name — the only
 	// stable identity profiles actually have (db.Store has no integer ID).
-	// The "id" exposed to the JNI/Kotlin side is purely positional, derived
-	// the same way every time via profileNameByID, so it stays consistent
-	// with nativeGetProfiles' own numbering instead of drifting out of sync
-	// with it (as a separately-incremented counter previously did).
 	configsByName  = make(map[string]*stalker.Config)
 	channelsByName = make(map[string]map[string]*stalker.Channel)
 	stateMu        sync.Mutex
+
+	// jniHLSInstances/jniProxyInstances hold per-profile service instances
+	// for multi-profile isolation in JNI/Android mode.
+	jniHLSInstances   = make(map[string]*hls.Instance)
+	jniProxyInstances = make(map[string]*proxy.Instance)
 )
 
 // profileNameByID resolves a positional JNI/Kotlin-facing id (1-based, same
@@ -129,17 +130,27 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeStartProfile(env *C.JNIEn
 	// "running", with the actual stop function (never a fake PID).
 	dashboard.MarkRunning(req.Name, func() { stopProfileByName(req.Name) })
 
+	// Create per-profile instances for multi-profile isolation.
+	hlsInst := hls.NewInstance()
+	proxyInst := proxy.NewInstance(c)
+
+	// Store instances so stopProfileByName can clean them up.
+	stateMu.Lock()
+	jniHLSInstances[req.Name] = hlsInst
+	jniProxyInstances[req.Name] = proxyInst
+	stateMu.Unlock()
+
 	// Bind the public listeners immediately so :HLS/:proxy are reachable within
 	// milliseconds — before the (possibly minutes-long, on flaky networks)
 	// portal handshake. Channel data is injected via SetChannels once the
 	// portal list is retrieved; until then channel requests return 503.
 	if c.HLS.Enabled {
-		hls.SetUserAgent(c.Portal.Model)
-		hls.SetDeviceHeaders(c.Portal.MAC, c.Portal.Model, c.Portal.SerialNumber)
-		go hls.Serve(c.HLS.Bind)
+		hlsInst.SetUserAgent(c.Portal.Model)
+		hlsInst.SetDeviceHeaders(c.Portal.MAC, c.Portal.Model, c.Portal.SerialNumber)
+		go hlsInst.Serve(c.HLS.Bind)
 	}
 	if c.Proxy.Enabled {
-		go proxy.Serve(c, c.Proxy.Bind)
+		go proxyInst.Serve(c.Proxy.Bind)
 	}
 
 	// Connect to the portal + fetch channels in the background, then publish
@@ -159,17 +170,18 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeStartProfile(env *C.JNIEn
 		log.Printf("Profile %s: loaded %d channels", req.Name, len(chs))
 
 		if c.HLS.Enabled {
-			hls.SetChannels(chs)
+			hlsInst.SetChannels(chs)
 		}
 		if c.Proxy.Enabled {
-			proxy.SetChannels(chs)
+			proxyInst.SetChannels(chs)
+			// Also retrieve radio channels (non-fatal)
+			if radio, err := c.Portal.RetrieveRadioChannels(); err == nil {
+				proxyInst.SetRadioChannels(radio)
+			}
 		}
 
-		// Real STBs dispatch get_all_channels (and other loads) before their
-		// first watchdog send, so start the watchdog only after
-		// RetrieveChannels above, not as part of Portal.Start().
 		if c.HLS.Enabled {
-			c.Portal.IsPlayingFunc = hls.IsPlaying
+			c.Portal.IsPlayingFunc = hlsInst.IsPlaying
 		}
 		if err := c.Portal.StartWatchdog(); err != nil {
 			log.Printf("Portal %s: failed to start watchdog: %v", req.Name, err)
@@ -190,16 +202,21 @@ func stopProfileByName(name string) {
 	c, ok := configsByName[name]
 	delete(configsByName, name)
 	delete(channelsByName, name)
+	hlsInst := jniHLSInstances[name]
+	delete(jniHLSInstances, name)
+	proxyInst := jniProxyInstances[name]
+	delete(jniProxyInstances, name)
 	stateMu.Unlock()
 
 	if ok && c != nil {
 		c.Portal.StopWatchdog()
-		if c.HLS.Enabled {
-			hls.Stop()
-		}
-		if c.Proxy.Enabled {
-			proxy.Stop()
-		}
+	}
+	// Stop per-profile instances directly (multi-profile safe).
+	if hlsInst != nil {
+		hlsInst.Stop()
+	}
+	if proxyInst != nil {
+		proxyInst.Stop()
 	}
 	dashboard.MarkStopped(name)
 }

@@ -34,6 +34,21 @@ var (
 	// the profile's own stop function instead.
 	inProcessRunning = make(map[string]func())
 
+	// inProcessInstances holds per-profile HLS and proxy instances for
+	// multi-profile isolation. Keyed by profile name.
+	inProcessInstances   = make(map[string]*inProcessState)
+	inProcessInstancesMu sync.Mutex
+)
+
+// inProcessState bundles per-profile service handles for multi-profile isolation.
+type inProcessState struct {
+	hlsInst   *hls.Instance
+	proxyInst *proxy.Instance
+	config    *stalker.Config
+}
+
+var (
+
 	// channelStore is shared with JNI exports for profile start/status
 	channelStore map[string]*stalker.Channel
 	chanMu       sync.RWMutex
@@ -64,8 +79,8 @@ func MarkStopped(name string) {
 // SetChannelStore sets the shared channel map (called from JNI init).
 func SetChannelStore(ch map[string]*stalker.Channel) { channelStore = ch }
 
-// startProfileInProcess loads a profile and starts all services in the current process.
-// Used when the standalone binary doesn't exist (JNI/Android mode).
+// startProfileInProcess loads a profile and starts all services in the current
+// process using per-profile HLS and proxy instances for multi-profile isolation.
 func startProfileInProcess(name string) error {
 	p, ok := store.Get(name)
 	if !ok {
@@ -76,17 +91,28 @@ func startProfileInProcess(name string) error {
 		return err
 	}
 
+	// Create per-profile instances for isolation.
+	hlsInst := hls.NewInstance()
+	proxyInst := proxy.NewInstance(c)
+
+	// Store instances so stopProcess can reach them.
+	inProcessInstancesMu.Lock()
+	inProcessInstances[name] = &inProcessState{
+		hlsInst:   hlsInst,
+		proxyInst: proxyInst,
+		config:    c,
+	}
+	inProcessInstancesMu.Unlock()
+
 	// Bind the public listeners immediately so the ports are reachable within
-	// milliseconds, before the (possibly slow) portal handshake. Channels are
-	// injected via SetChannels once retrieved; until then channel requests
-	// return 503.
+	// milliseconds, before the (possibly slow) portal handshake.
 	if c.HLS.Enabled {
-		hls.SetUserAgent(c.Portal.Model)
-		hls.SetDeviceHeaders(c.Portal.MAC, c.Portal.Model, c.Portal.SerialNumber)
-		go hls.Serve(c.HLS.Bind)
+		hlsInst.SetUserAgent(c.Portal.Model)
+		hlsInst.SetDeviceHeaders(c.Portal.MAC, c.Portal.Model, c.Portal.SerialNumber)
+		go hlsInst.Serve(c.HLS.Bind)
 	}
 	if c.Proxy.Enabled {
-		go proxy.Serve(c, c.Proxy.Bind)
+		go proxyInst.Serve(c.Proxy.Bind)
 	}
 
 	// Start portal, fetch channels, then publish them to the listening services.
@@ -111,34 +137,36 @@ func startProfileInProcess(name string) error {
 		log.Printf("Profile %s: loaded %d channels", name, len(chs))
 
 		if c.HLS.Enabled {
-			hls.SetChannels(snapshot)
+			hlsInst.SetChannels(snapshot)
 		}
 		if c.Proxy.Enabled {
-			proxy.SetChannels(snapshot)
+			proxyInst.SetChannels(snapshot)
+			// Also retrieve radio channels (non-fatal)
+			if radio, err := c.Portal.RetrieveRadioChannels(); err == nil {
+				proxyInst.SetRadioChannels(radio)
+			}
 		}
 
-		// Real STBs dispatch get_all_channels (and other loads) before their
-		// first watchdog send, so start the watchdog only after
-		// RetrieveChannels above, not as part of Portal.Start().
 		if c.HLS.Enabled {
-			c.Portal.IsPlayingFunc = hls.IsPlaying
+			c.Portal.IsPlayingFunc = hlsInst.IsPlaying
 		}
 		if err := c.Portal.StartWatchdog(); err != nil {
 			log.Printf("Portal %s: failed to start watchdog: %v", name, err)
 		}
 	}()
 
-	// Register as running with a real stop function — never a fake
-	// self-referencing os.Process, which would get Kill()ed as if it were a
-	// subprocess and take down the whole engine (caller holds procMu).
+	// Register as running with a real stop function.
 	inProcessRunning[name] = func() {
 		c.Portal.StopWatchdog()
 		if c.HLS.Enabled {
-			hls.Stop()
+			hlsInst.Stop()
 		}
 		if c.Proxy.Enabled {
-			proxy.Stop()
+			proxyInst.Stop()
 		}
+		inProcessInstancesMu.Lock()
+		delete(inProcessInstances, name)
+		inProcessInstancesMu.Unlock()
 	}
 
 	log.Printf("Started profile %s in-process (HLS=%s Proxy=%s)", name, c.HLS.Bind, c.Proxy.Bind)
