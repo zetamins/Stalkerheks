@@ -177,6 +177,18 @@ func LoadProfile(store *db.Store, name string) (*Config, error) {
 		c.Portal.DeviceID2 = c.Portal.GetUID("device_id", c.Portal.Token)
 	}
 
+	// Backfill cdn_mac for profiles created before this field existed (the
+	// common case on the Android app and any pre-existing install). Save()
+	// auto-generates it for new profiles, but profiles already on disk load
+	// with an empty value — and an empty cdn_mac falls back to the flagged
+	// auth MAC, which 458s on playback. Generate one and persist it so the
+	// anti-sharing bypass works automatically, without re-creating profiles.
+	if c.Portal.CDNMac == "" {
+		c.Portal.CDNMac = db.RandomCDNMac(c.Portal.MAC)
+		p.Portal.CDNMac = c.Portal.CDNMac
+		_ = store.Save(p) // best-effort persist; the in-memory value works regardless
+	}
+
 	if err := c.validate(); err != nil {
 		return nil, err
 	}

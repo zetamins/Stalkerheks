@@ -190,16 +190,6 @@ func (s *Store) Save(p Profile) error {
 		p.Portal.UIDSecret = randomUIDSecret()
 	}
 
-	// Auto-generate a CDN MAC (distinct from the auth MAC) if none was set.
-	// The portal flags the account's auth MAC for anti-sharing and returns
-	// HTTP 458 on stream requests carrying it, but the play_token isn't bound
-	// to the MAC — so streams play when the play URL's mac= is a different
-	// value. A user-supplied cdn_mac is respected; otherwise one is generated
-	// here. See stalker.Portal.cdnMAC.
-	if p.Portal.CDNMac == "" {
-		p.Portal.CDNMac = randomCDNMac(p.Portal.MAC)
-	}
-
 	// Auto-append API endpoint
 	p.Portal.URL = normalizeURL(p.Portal.URL)
 	if p.Portal.URL2 != "" {
@@ -212,6 +202,22 @@ func (s *Store) Save(p Profile) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, _ := s.readAllLocked()
+
+	// Auto-generate a CDN MAC (distinct from the auth MAC) when absent. The
+	// portal flags the account's auth MAC for anti-sharing and returns HTTP
+	// 458 on stream requests carrying it, but the play_token isn't bound to
+	// the MAC — so streams play when the play URL's mac= is a different value.
+	// cdn_mac is hidden from the UI, so an edit submits an empty value: keep
+	// the existing one across updates and only generate for a brand-new
+	// profile (or one that never had it). See stalker.Portal.cdnMAC.
+	if p.Portal.CDNMac == "" {
+		if old, ok := m[p.Name]; ok && old.Portal.CDNMac != "" {
+			p.Portal.CDNMac = old.Portal.CDNMac
+		} else {
+			p.Portal.CDNMac = RandomCDNMac(p.Portal.MAC)
+		}
+	}
+
 	m[p.Name] = p
 	return s.writeAllLocked(m)
 }
@@ -249,11 +255,12 @@ func randomToken() string {
 	return strings.ToUpper(hex.EncodeToString(b))
 }
 
-// randomCDNMac returns a random MAC for CDN/stream play URLs, distinct from
+// RandomCDNMac returns a random MAC for CDN/stream play URLs, distinct from
 // authMAC and using an Infomir OUI (00:1A:79) so it still resembles a real MAG
 // STB to the portal. Used to populate cdn_mac when a profile is saved without
-// one, so the per-MAC 458 anti-sharing bypass works out of the box.
-func randomCDNMac(authMAC string) string {
+// one (and to backfill pre-existing profiles on load), so the per-MAC 458
+// anti-sharing bypass works out of the box.
+func RandomCDNMac(authMAC string) string {
 	b := make([]byte, 3)
 	for {
 		if _, err := cryptorand.Read(b); err != nil {
