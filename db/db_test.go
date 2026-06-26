@@ -4,6 +4,8 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -113,6 +115,45 @@ func TestSaveAutoDefaults(t *testing.T) {
 	}
 	if got.Services.HLSBind != "0.0.0.0:9999" {
 		t.Errorf("default HLSBind = %q", got.Services.HLSBind)
+	}
+	// cdn_mac is auto-generated, distinct from the auth MAC, valid format.
+	if got.Portal.CDNMac == "" {
+		t.Error("CDNMac should be auto-generated when empty")
+	}
+	if strings.EqualFold(got.Portal.CDNMac, got.Portal.MAC) {
+		t.Errorf("CDNMac %q must differ from auth MAC %q", got.Portal.CDNMac, got.Portal.MAC)
+	}
+	if !regexp.MustCompile(`^[0-9A-F]{2}(:[0-9A-F]{2}){5}$`).MatchString(got.Portal.CDNMac) {
+		t.Errorf("CDNMac %q is not a valid uppercase MAC", got.Portal.CDNMac)
+	}
+}
+
+func TestSaveCDNMacRespectsUserValue(t *testing.T) {
+	dir, err := ioutil.TempDir("", "stalkerhek-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	store, err := Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const userCDN = "11:22:33:44:55:66"
+	p := Profile{
+		Name: "explicit",
+		Portal: PortalConfig{
+			SerialNumber: "SN", DeviceID: "DEV", MAC: "00:00:00:00:00:00",
+			URL: "http://example.com/", TimeZone: "UTC/UTC", CDNMac: userCDN,
+		},
+	}
+	if err := store.Save(p); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	got, _ := store.Get("explicit")
+	if got.Portal.CDNMac != userCDN {
+		t.Errorf("user-set CDNMac = %q, want %q (must not be overwritten)", got.Portal.CDNMac, userCDN)
 	}
 }
 
