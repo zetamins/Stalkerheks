@@ -38,6 +38,10 @@ import (
 var (
 	store *db.Store
 
+	// jniDataDir is the Android app data dir (holds stalkerhek.db and the
+	// per-profile .log files the dashboard reads). Captured in nativeInit.
+	jniDataDir string
+
 	// configsByName/channelsByName are keyed by profile name — the only
 	// stable identity profiles actually have (db.Store has no integer ID).
 	configsByName  = make(map[string]*stalker.Config)
@@ -86,6 +90,7 @@ func makeStr(env *C.JNIEnv, s string) C.jstring {
 //export Java_com_stalkerhek_app_engine_EngineBridge_nativeInit
 func Java_com_stalkerhek_app_engine_EngineBridge_nativeInit(env *C.JNIEnv, cls C.jclass, jdataDir C.jstring) C.jstring {
 	dataDir := readStr(env, jdataDir)
+	jniDataDir = dataDir
 	s, err := db.Open(dataDir + "/stalkerhek.db")
 	if err != nil {
 		return makeStr(env, `{"ok":false,"error":"`+err.Error()+`"}`)
@@ -113,6 +118,10 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeStartProfile(env *C.JNIEn
 	if err := json.Unmarshal([]byte(jsonStr), &req); err != nil || req.Name == "" {
 		return makeStr(env, `{"phase":"error","message":"Invalid JSON or missing name","running":false}`)
 	}
+
+	// Tee engine logs to <dataDir>/<name>.log so the dashboard "View Logs" shows
+	// them on Android (in-process mode writes no per-profile log otherwise).
+	dashboard.SetupProfileLogging(jniDataDir, req.Name)
 
 	c, err := stalker.LoadProfile(store, req.Name)
 	if err != nil {

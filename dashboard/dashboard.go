@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -60,6 +61,27 @@ var (
 // SetInProcessMode marks that profiles should be started in the current process (JNI/Android).
 func SetInProcessMode() { inProcessMode = true }
 
+// SetupProfileLogging tees the global logger to <dir>/<name>.log (truncated on
+// each start) in addition to stderr, so the dashboard's "View Logs" works in
+// every run mode — directly-launched binary, dashboard-spawned subprocess, and
+// in-process/Android. Previously only the spawned case captured output (via
+// redirected stdout), so logs were invisible on Android and for a binary run
+// by hand. Best-effort: if the file can't be opened, logging stays stderr-only.
+//
+// In-process mode shares one global logger, so with multiple concurrent
+// profiles the most-recently-started one owns the log file; the common case is
+// a single active profile.
+func SetupProfileLogging(dir, name string) {
+	if dir == "" || name == "" {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(dir, name+".log"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	log.SetOutput(io.MultiWriter(os.Stderr, f))
+}
+
 // MarkRunning registers a profile as running in-process (called from JNI
 // nativeStartProfile) along with its stop function.
 func MarkRunning(name string, stop func()) {
@@ -82,6 +104,7 @@ func SetChannelStore(ch map[string]*stalker.Channel) { channelStore = ch }
 // startProfileInProcess loads a profile and starts all services in the current
 // process using per-profile HLS and proxy instances for multi-profile isolation.
 func startProfileInProcess(name string) error {
+	SetupProfileLogging(profDir, name)
 	p, ok := store.Get(name)
 	if !ok {
 		return os.ErrNotExist
@@ -322,11 +345,10 @@ func handleProfileStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Standalone binary mode: spawn a new process
+	// Standalone binary mode: spawn a new process. The child engine self-logs
+	// to <profDir>/<name>.log via SetupProfileLogging, so we don't redirect its
+	// stdout/stderr here — doing so would write every line twice.
 	cmd := exec.Command(req.Binary, "-profile", req.Name, "-db", profDir)
-	logFile, _ := os.Create(filepath.Join(profDir, req.Name+".log"))
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
 		writeJSON(w, map[string]string{"error": "failed to start: " + err.Error()})
 		return

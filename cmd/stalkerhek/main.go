@@ -22,6 +22,10 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	flag.Parse()
 
+	// Tee logs to <db>/<profile>.log so the dashboard's "View Logs" works even
+	// when the engine is launched directly (not spawned by the dashboard).
+	dashboard.SetupProfileLogging(*flagDBDir, *flagProfile)
+
 	// Open profile database
 	store, err := db.Open(*flagDBDir + "/stalkerhek.db")
 	if err != nil {
