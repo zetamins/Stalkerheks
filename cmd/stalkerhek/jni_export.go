@@ -123,6 +123,14 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeInit(env *C.JNIEnv, cls C
 	// Mark in-process mode so the dashboard starts profiles without spawning a binary
 	dashboard.SetInProcessMode()
 
+	// Route the dashboard "Start" button through the JNI start path so both share
+	// one set of per-profile HLS/proxy instances (no duplicate listeners / port
+	// collision when a profile is started from both the app and the dashboard).
+	dashboard.SetInProcessStarter(func(name string) error {
+		_, err := jniStartProfile(name)
+		return err
+	})
+
 	// Start dashboard web UI on 0.0.0.0:8080 once (it outlives engine restarts).
 	if !dashboardStarted {
 		dashboardStarted = true
@@ -145,25 +153,48 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeStartProfile(env *C.JNIEn
 		return makeStr(env, `{"phase":"error","message":"Invalid JSON or missing name","running":false}`)
 	}
 
-	// Tee engine logs to <dataDir>/<name>.log so the dashboard "View Logs" shows
-	// them on Android (in-process mode writes no per-profile log otherwise).
-	dashboard.SetupProfileLogging(jniDataDir, req.Name)
-
-	c, err := stalker.LoadProfile(store, req.Name)
+	c, err := jniStartProfile(req.Name)
 	if err != nil {
 		return makeStr(env, fmt.Sprintf(`{"phase":"error","message":"%s","running":false}`, err.Error()))
 	}
 
+	hlsPort := c.HLS.Bind[strings.LastIndexByte(c.HLS.Bind, ':')+1:]
+	proxyPort := c.Proxy.Bind[strings.LastIndexByte(c.Proxy.Bind, ':')+1:]
+	return makeStr(env, fmt.Sprintf(
+		`{"phase":"starting","message":"OK","hls_addr":"0.0.0.0:%s","proxy_addr":"0.0.0.0:%s","running":true,"channels_count":0}`,
+		hlsPort, proxyPort))
+}
+
+// jniStartProfile loads a profile and starts all its services in-process: it
+// tees logs, registers the profile in the dashboard's process tracker, creates
+// per-profile HLS/proxy instances, binds their listeners immediately, and
+// connects to the portal + fetches channels in the background.
+//
+// It is the single in-process start path on Android: the JNI nativeStartProfile
+// calls it directly, and the dashboard "Start" button calls it via the callback
+// registered with dashboard.SetInProcessStarter. Without this sharing the two
+// paths kept separate instance state and could spin up duplicate HLS/proxy
+// servers on the same ports (bind collision) for one profile.
+func jniStartProfile(name string) (*stalker.Config, error) {
+	// Tee engine logs to <dataDir>/<name>.log so the dashboard "View Logs" shows
+	// them on Android (in-process mode writes no per-profile log otherwise).
+	dashboard.SetupProfileLogging(jniDataDir, name)
+
+	c, err := stalker.LoadProfile(store, name)
+	if err != nil {
+		return nil, err
+	}
+
 	// Stop any previous run of this profile first (idempotent restart).
-	stopProfileByName(req.Name)
+	stopProfileByName(name)
 
 	stateMu.Lock()
-	configsByName[req.Name] = c
+	configsByName[name] = c
 	stateMu.Unlock()
 
 	// Register in dashboard's process tracker so /api/profiles shows
 	// "running", with the actual stop function (never a fake PID).
-	dashboard.MarkRunning(req.Name, func() { stopProfileByName(req.Name) })
+	dashboard.MarkRunning(name, func() { stopProfileByName(name) })
 
 	// Create per-profile instances for multi-profile isolation.
 	hlsInst := hls.NewInstance()
@@ -171,8 +202,8 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeStartProfile(env *C.JNIEn
 
 	// Store instances so stopProfileByName can clean them up.
 	stateMu.Lock()
-	jniHLSInstances[req.Name] = hlsInst
-	jniProxyInstances[req.Name] = proxyInst
+	jniHLSInstances[name] = hlsInst
+	jniProxyInstances[name] = proxyInst
 	stateMu.Unlock()
 
 	// Bind the public listeners immediately so :HLS/:proxy are reachable within
@@ -195,21 +226,21 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeStartProfile(env *C.JNIEn
 		// channel publish) would otherwise abort the whole app — recover and log.
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("Profile %s background goroutine panic recovered: %v", req.Name, r)
+				log.Printf("Profile %s background goroutine panic recovered: %v", name, r)
 			}
 		}()
-		log.Printf("Connecting to portal %s...", req.Name)
+		log.Printf("Connecting to portal %s...", name)
 		if err := c.Portal.Start(); err != nil {
-			log.Printf("Portal %s: %v", req.Name, err)
+			log.Printf("Portal %s: %v", name, err)
 		}
 		chs, err := c.Portal.RetrieveChannels()
 		if err != nil {
-			log.Printf("Channels %s: %v", req.Name, err)
+			log.Printf("Channels %s: %v", name, err)
 		}
 		stateMu.Lock()
-		channelsByName[req.Name] = chs
+		channelsByName[name] = chs
 		stateMu.Unlock()
-		log.Printf("Profile %s: loaded %d channels", req.Name, len(chs))
+		log.Printf("Profile %s: loaded %d channels", name, len(chs))
 
 		if c.HLS.Enabled {
 			hlsInst.SetChannels(chs)
@@ -226,15 +257,11 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeStartProfile(env *C.JNIEn
 			c.Portal.IsPlayingFunc = hlsInst.IsPlaying
 		}
 		if err := c.Portal.StartWatchdog(); err != nil {
-			log.Printf("Portal %s: failed to start watchdog: %v", req.Name, err)
+			log.Printf("Portal %s: failed to start watchdog: %v", name, err)
 		}
 	}()
 
-	hlsPort := c.HLS.Bind[strings.LastIndexByte(c.HLS.Bind, ':')+1:]
-	proxyPort := c.Proxy.Bind[strings.LastIndexByte(c.Proxy.Bind, ':')+1:]
-	return makeStr(env, fmt.Sprintf(
-		`{"phase":"starting","message":"OK","hls_addr":"0.0.0.0:%s","proxy_addr":"0.0.0.0:%s","running":true,"channels_count":0}`,
-		hlsPort, proxyPort))
+	return c, nil
 }
 
 // stopProfileByName stops a running profile's watchdog/HLS/proxy and clears

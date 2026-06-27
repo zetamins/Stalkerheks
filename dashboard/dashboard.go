@@ -57,7 +57,18 @@ var (
 
 	// inProcessMode is set to true on Android/JNI where no standalone binary exists.
 	inProcessMode bool
+
+	// inProcessStarter, when set (by the JNI layer via SetInProcessStarter),
+	// replaces the dashboard's own startProfileInProcess so Android has a single
+	// in-process start path. Without it, a dashboard "Start" and a JNI start
+	// would each spin up their own HLS/proxy instances for the same profile on
+	// the same ports — a bind collision and a leaked instance.
+	inProcessStarter func(string) error
 )
+
+// SetInProcessStarter lets the JNI layer register its own in-process start
+// function as the single source of truth for "Start" in inProcessMode.
+func SetInProcessStarter(fn func(string) error) { inProcessStarter = fn }
 
 // SetInProcessMode marks that profiles should be started in the current process (JNI/Android).
 func SetInProcessMode() { inProcessMode = true }
@@ -353,7 +364,13 @@ func handleProfileStart(w http.ResponseWriter, r *http.Request) {
 
 	// In JNI/Android mode, start profiles in-process instead of spawning a binary.
 	if inProcessMode {
-		if err := startProfileInProcess(req.Name); err != nil {
+		// Prefer the JNI-registered starter so a dashboard "Start" and a JNI
+		// start share one set of HLS/proxy instances (no port collision / leak).
+		start := startProfileInProcess
+		if inProcessStarter != nil {
+			start = inProcessStarter
+		}
+		if err := start(req.Name); err != nil {
 			writeJSON(w, map[string]string{"error": "failed to start: " + err.Error()})
 			return
 		}
