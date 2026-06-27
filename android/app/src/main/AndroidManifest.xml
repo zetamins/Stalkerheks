@@ -40,7 +40,14 @@
         <service
             android:name=".EngineService"
             android:exported="false"
-            android:foregroundServiceType="specialUse" />
+            android:foregroundServiceType="specialUse">
+            <!-- Required for a "specialUse" foreground service on Android 14+
+                 (targetSdk 34+). Without it the FGS type is non-compliant and
+                 Play submission is rejected. -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Local IPTV proxy/relay engine serving an on-device player" />
+        </service>
 
         <receiver
             android:name=".BootReceiver"

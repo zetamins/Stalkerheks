@@ -29,7 +29,9 @@ sealed class EngineState {
 data class ProfileConfig(
     val id: Int = 0,
     val name: String = "",
-    @SerialName("portal_url") val portalUrl: String = "",
+    // Go's nativeGetProfiles emits "portalUrl" (camelCase); must match or the
+    // field decodes empty.
+    @SerialName("portalUrl") val portalUrl: String = "",
     val mac: String = "",
     val username: String = "",
     val password: String = "",

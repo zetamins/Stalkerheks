@@ -42,6 +42,11 @@ var (
 	// per-profile .log files the dashboard reads). Captured in nativeInit.
 	jniDataDir string
 
+	// dashboardStarted guards the single dashboard HTTP listener. nativeInit is
+	// re-called on engine restart; starting dashboard.Start twice makes the
+	// second ListenAndServe(:8080) fail with "address already in use".
+	dashboardStarted bool
+
 	// configsByName/channelsByName are keyed by profile name — the only
 	// stable identity profiles actually have (db.Store has no integer ID).
 	configsByName  = make(map[string]*stalker.Config)
@@ -101,8 +106,11 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeInit(env *C.JNIEnv, cls C
 	// Mark in-process mode so the dashboard starts profiles without spawning a binary
 	dashboard.SetInProcessMode()
 
-	// Start dashboard web UI on 0.0.0.0:8080 (runs ListenAndServe in this goroutine)
-	go dashboard.Start(dataDir, "0.0.0.0:8080", store)
+	// Start dashboard web UI on 0.0.0.0:8080 once (it outlives engine restarts).
+	if !dashboardStarted {
+		dashboardStarted = true
+		go dashboard.Start(dataDir, "0.0.0.0:8080", store)
+	}
 
 	return makeStr(env, fmt.Sprintf(`{"ok":true,"profiles_loaded":%d}`, len(profiles)))
 }

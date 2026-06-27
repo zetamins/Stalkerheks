@@ -51,14 +51,14 @@ func NewInstance(c *stalker.Config) *Instance {
 		log.Fatalln(err)
 	}
 	return &Instance{
-		config:           c,
-		destination:      link.Scheme + "://" + link.Host,
-		randomHex:        generateRandomHex(32),
-		channels:         make(map[string]*stalker.Channel),
-		channelsByTitle:  make(map[string]*stalker.Channel),
-		radioChannels:    make(map[string]*stalker.RadioChannel),
+		config:               c,
+		destination:          link.Scheme + "://" + link.Host,
+		randomHex:            generateRandomHex(32),
+		channels:             make(map[string]*stalker.Channel),
+		channelsByTitle:      make(map[string]*stalker.Channel),
+		radioChannels:        make(map[string]*stalker.RadioChannel),
 		radioChannelsByTitle: make(map[string]*stalker.RadioChannel),
-		perSTBLock:       make(map[string]*sync.Mutex),
+		perSTBLock:           make(map[string]*sync.Mutex),
 	}
 }
 
@@ -149,7 +149,14 @@ func (inst *Instance) Stop() {
 	inst.server = nil
 	inst.serverMu.Unlock()
 	if srv != nil {
-		srv.Shutdown(context.Background())
+		// A bounded shutdown so an in-flight long-lived request can't block the
+		// restart indefinitely; force-close anything still open after the grace
+		// period. (See hls.Instance.Stop — same live-stream hang.)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			srv.Close()
+		}
 	}
 }
 
@@ -625,9 +632,9 @@ func (inst *Instance) speedtestProxyHandler(w http.ResponseWriter, r *http.Reque
 
 // buildMetrics, buildVersion, buildPrehash, buildHWVersion2, buildSignature
 // delegate to the configured portal's shared implementations.
-func (inst *Instance) buildMetrics() string  { return inst.config.Portal.Metrics() }
-func (inst *Instance) buildVersion() string  { return inst.config.Portal.VersionString() }
-func (inst *Instance) buildPrehash() string  { return inst.config.Portal.Prehash() }
+func (inst *Instance) buildMetrics() string    { return inst.config.Portal.Metrics() }
+func (inst *Instance) buildVersion() string    { return inst.config.Portal.VersionString() }
+func (inst *Instance) buildPrehash() string    { return inst.config.Portal.Prehash() }
 func (inst *Instance) buildHWVersion2() string { return inst.config.Portal.HWVersion2() }
 func (inst *Instance) buildSignature() string {
 	if inst.config.Portal.Signature != "" {

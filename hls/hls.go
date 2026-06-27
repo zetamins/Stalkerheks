@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/erkexzcx/stalkerhek/stalker"
 )
@@ -150,7 +151,16 @@ func (inst *Instance) Stop() {
 	inst.server = nil
 	inst.serverMu.Unlock()
 	if srv != nil {
-		srv.Shutdown(context.Background())
+		// Live channel streams are open-ended HTTP responses that never finish
+		// on their own, so a plain Shutdown(context.Background()) blocks forever
+		// waiting for them to drain — this was the hang on profile restart/stop.
+		// Give in-flight requests a brief grace period, then force-close the
+		// lingering stream connections.
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			srv.Close()
+		}
 	}
 	// Stop the per-channel keep-alive goroutines too.
 	inst.playlistMu.RLock()
@@ -189,7 +199,9 @@ func SetChannels(chs map[string]*stalker.Channel) { defaultInstance.SetChannels(
 func SetUserAgent(model string) { defaultInstance.SetUserAgent(model) }
 
 // SetDeviceHeaders sets device headers on the default HLS instance.
-func SetDeviceHeaders(mac, model, serial string) { defaultInstance.SetDeviceHeaders(mac, model, serial) }
+func SetDeviceHeaders(mac, model, serial string) {
+	defaultInstance.SetDeviceHeaders(mac, model, serial)
+}
 
 // IsPlaying returns the play state of the default HLS instance.
 func IsPlaying() bool { return defaultInstance.IsPlaying() }
