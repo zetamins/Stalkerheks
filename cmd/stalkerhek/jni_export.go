@@ -92,8 +92,25 @@ func makeStr(env *C.JNIEnv, s string) C.jstring {
 	return C.jniMakeString(env, cs)
 }
 
+// jniRecover turns a panic inside a JNI-exported function into a logged error
+// response instead of crashing the app. A Go panic that unwinds across the cgo
+// boundary aborts the whole process (SIGABRT) — no Kotlin try/catch can save it
+// — so every exported call defers this with its named return. Used as:
+//
+//	func Java_..._x(env *C.JNIEnv, ...) (result C.jstring) {
+//	    defer jniRecover(env, "x", &result)
+//	    ...
+//	}
+func jniRecover(env *C.JNIEnv, name string, out *C.jstring) {
+	if r := recover(); r != nil {
+		log.Printf("JNI %s panic recovered: %v", name, r)
+		*out = makeStr(env, fmt.Sprintf(`{"ok":false,"running":false,"error":"engine panic in %s"}`, name))
+	}
+}
+
 //export Java_com_stalkerhek_app_engine_EngineBridge_nativeInit
-func Java_com_stalkerhek_app_engine_EngineBridge_nativeInit(env *C.JNIEnv, cls C.jclass, jdataDir C.jstring) C.jstring {
+func Java_com_stalkerhek_app_engine_EngineBridge_nativeInit(env *C.JNIEnv, cls C.jclass, jdataDir C.jstring) (result C.jstring) {
+	defer jniRecover(env, "nativeInit", &result)
 	dataDir := readStr(env, jdataDir)
 	jniDataDir = dataDir
 	s, err := db.Open(dataDir + "/stalkerhek.db")
@@ -116,7 +133,8 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeInit(env *C.JNIEnv, cls C
 }
 
 //export Java_com_stalkerhek_app_engine_EngineBridge_nativeStartProfile
-func Java_com_stalkerhek_app_engine_EngineBridge_nativeStartProfile(env *C.JNIEnv, cls C.jclass, jprofileJson C.jstring) C.jstring {
+func Java_com_stalkerhek_app_engine_EngineBridge_nativeStartProfile(env *C.JNIEnv, cls C.jclass, jprofileJson C.jstring) (result C.jstring) {
+	defer jniRecover(env, "nativeStartProfile", &result)
 	jsonStr := readStr(env, jprofileJson)
 
 	// Extract just the profile name from Kotlin JSON — the full profile is already in the store.
@@ -173,6 +191,13 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeStartProfile(env *C.JNIEn
 	// Connect to the portal + fetch channels in the background, then publish
 	// the channel list to the already-listening services.
 	go func() {
+		// A panic in this background goroutine (portal I/O, JSON parsing,
+		// channel publish) would otherwise abort the whole app — recover and log.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Profile %s background goroutine panic recovered: %v", req.Name, r)
+			}
+		}()
 		log.Printf("Connecting to portal %s...", req.Name)
 		if err := c.Portal.Start(); err != nil {
 			log.Printf("Portal %s: %v", req.Name, err)
@@ -239,7 +264,8 @@ func stopProfileByName(name string) {
 }
 
 //export Java_com_stalkerhek_app_engine_EngineBridge_nativeStopProfile
-func Java_com_stalkerhek_app_engine_EngineBridge_nativeStopProfile(env *C.JNIEnv, cls C.jclass, jid C.jint) C.jstring {
+func Java_com_stalkerhek_app_engine_EngineBridge_nativeStopProfile(env *C.JNIEnv, cls C.jclass, jid C.jint) (result C.jstring) {
+	defer jniRecover(env, "nativeStopProfile", &result)
 	name, ok := profileNameByID(int(jid))
 	if !ok {
 		return makeStr(env, `{"ok":false,"error":"unknown profile id"}`)
@@ -249,7 +275,8 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeStopProfile(env *C.JNIEnv
 }
 
 //export Java_com_stalkerhek_app_engine_EngineBridge_nativeGetChannels
-func Java_com_stalkerhek_app_engine_EngineBridge_nativeGetChannels(env *C.JNIEnv, cls C.jclass, jid C.jint, jtype C.jstring) C.jstring {
+func Java_com_stalkerhek_app_engine_EngineBridge_nativeGetChannels(env *C.JNIEnv, cls C.jclass, jid C.jint, jtype C.jstring) (result C.jstring) {
+	defer jniRecover(env, "nativeGetChannels", &result)
 	name, ok := profileNameByID(int(jid))
 	if !ok {
 		return makeStr(env, `[]`)
@@ -275,7 +302,8 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeGetChannels(env *C.JNIEnv
 }
 
 //export Java_com_stalkerhek_app_engine_EngineBridge_nativeGetProfiles
-func Java_com_stalkerhek_app_engine_EngineBridge_nativeGetProfiles(env *C.JNIEnv, cls C.jclass) C.jstring {
+func Java_com_stalkerhek_app_engine_EngineBridge_nativeGetProfiles(env *C.JNIEnv, cls C.jclass) (result C.jstring) {
+	defer jniRecover(env, "nativeGetProfiles", &result)
 	profiles := store.GetAll()
 	type po struct {
 		ID        int    `json:"id"`
@@ -292,7 +320,8 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeGetProfiles(env *C.JNIEnv
 }
 
 //export Java_com_stalkerhek_app_engine_EngineBridge_nativeGetProfileStatus
-func Java_com_stalkerhek_app_engine_EngineBridge_nativeGetProfileStatus(env *C.JNIEnv, cls C.jclass, jid C.jint) C.jstring {
+func Java_com_stalkerhek_app_engine_EngineBridge_nativeGetProfileStatus(env *C.JNIEnv, cls C.jclass, jid C.jint) (result C.jstring) {
+	defer jniRecover(env, "nativeGetProfileStatus", &result)
 	name, ok := profileNameByID(int(jid))
 	if !ok {
 		return makeStr(env, `{"phase":"idle","message":"Not started","running":false,"channels_count":0,"hls_addr":"","proxy_addr":""}`)
@@ -312,7 +341,8 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeGetProfileStatus(env *C.J
 }
 
 //export Java_com_stalkerhek_app_engine_EngineBridge_nativeCreateProfile
-func Java_com_stalkerhek_app_engine_EngineBridge_nativeCreateProfile(env *C.JNIEnv, cls C.jclass, jprofileJson C.jstring) C.jstring {
+func Java_com_stalkerhek_app_engine_EngineBridge_nativeCreateProfile(env *C.JNIEnv, cls C.jclass, jprofileJson C.jstring) (result C.jstring) {
+	defer jniRecover(env, "nativeCreateProfile", &result)
 	jsonStr := readStr(env, jprofileJson)
 
 	// The Kotlin ProfileConfig is a FLAT shape (portalUrl/mac/hls_port at the
@@ -377,7 +407,8 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeCreateProfile(env *C.JNIE
 }
 
 //export Java_com_stalkerhek_app_engine_EngineBridge_nativeDeleteProfile
-func Java_com_stalkerhek_app_engine_EngineBridge_nativeDeleteProfile(env *C.JNIEnv, cls C.jclass, jid C.jint) C.jstring {
+func Java_com_stalkerhek_app_engine_EngineBridge_nativeDeleteProfile(env *C.JNIEnv, cls C.jclass, jid C.jint) (result C.jstring) {
+	defer jniRecover(env, "nativeDeleteProfile", &result)
 	name, ok := profileNameByID(int(jid))
 	if !ok {
 		return makeStr(env, `{"ok":false,"error":"unknown profile id"}`)
@@ -390,7 +421,8 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeDeleteProfile(env *C.JNIE
 }
 
 //export Java_com_stalkerhek_app_engine_EngineBridge_nativeShutdown
-func Java_com_stalkerhek_app_engine_EngineBridge_nativeShutdown(env *C.JNIEnv, cls C.jclass) C.jstring {
+func Java_com_stalkerhek_app_engine_EngineBridge_nativeShutdown(env *C.JNIEnv, cls C.jclass) (result C.jstring) {
+	defer jniRecover(env, "nativeShutdown", &result)
 	stateMu.Lock()
 	names := make([]string, 0, len(configsByName))
 	for name := range configsByName {

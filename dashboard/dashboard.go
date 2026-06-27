@@ -141,6 +141,13 @@ func startProfileInProcess(name string) error {
 
 	// Start portal, fetch channels, then publish them to the listening services.
 	go func() {
+		// Recover so a panic in portal I/O / parsing can't abort the whole
+		// process (fatal in the in-process/Android engine).
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Profile %s background goroutine panic recovered: %v", name, r)
+			}
+		}()
 		log.Printf("Connecting to portal %s...", name)
 		if err := c.Portal.Start(); err != nil {
 			log.Printf("Portal %s: %v", name, err)
