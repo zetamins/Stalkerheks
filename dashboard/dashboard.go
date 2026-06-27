@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -236,12 +237,12 @@ func handleProfiles(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad request", 400)
 			return
 		}
-		if p.Name == "" {
-			http.Error(w, "name required", 400)
+		if msg := validateProfileFields(p); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
 		if err := store.Save(p); err != nil {
-			writeJSON(w, map[string]string{"error": err.Error()})
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		log.Printf("Created profile: %s", p.Name)
@@ -291,8 +292,12 @@ func handleProfileByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p.Name = name
+		if msg := validateProfileFields(p); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
 		if err := store.Save(p); err != nil {
-			writeJSON(w, map[string]string{"error": err.Error()})
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		writeJSON(w, map[string]string{"ok": "saved"})
@@ -431,4 +436,28 @@ func validProfileName(name string) bool {
 		return false
 	}
 	return !strings.ContainsAny(name, `/\`+"\x00")
+}
+
+var dashMACRe = regexp.MustCompile(`^[A-Fa-f0-9]{2}(:[A-Fa-f0-9]{2}){5}$`)
+
+// validateProfileFields rejects a profile that would Save successfully but then
+// fail to load. stalker's validate() (run at Start) hard-requires serial_number
+// and device_id, yet neither the client form nor db.Save enforces or generates
+// them — so without this an incomplete profile could be created over HTTP and
+// only fail later with a confusing "empty device_id" at Start. Returns an empty
+// string when the profile is acceptable.
+func validateProfileFields(p db.Profile) string {
+	switch {
+	case strings.TrimSpace(p.Name) == "":
+		return "name is required"
+	case strings.TrimSpace(p.Portal.URL) == "":
+		return "portal URL is required"
+	case !dashMACRe.MatchString(strings.TrimSpace(p.Portal.MAC)):
+		return "a valid MAC is required (AA:BB:CC:DD:EE:FF)"
+	case strings.TrimSpace(p.Portal.SerialNumber) == "":
+		return "serial number is required"
+	case strings.TrimSpace(p.Portal.DeviceID) == "":
+		return "device_id is required"
+	}
+	return ""
 }

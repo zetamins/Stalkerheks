@@ -142,15 +142,15 @@ async function loadProfiles(){
     '</div></div>').join('')}
 function addProfile(){
   showModal('New Profile',formHTML({}),async()=>{
-    const cfg=readForm();if(!cfg.name||!cfg.portal?.url||!cfg.portal?.mac){toast('Name, URL and MAC are required','error');return}
+    const cfg=readForm();if(!cfg.name||!cfg.portal?.url||!cfg.portal?.mac||!cfg.portal?.serial_number||!cfg.portal?.device_id){toast('Name, URL, MAC, Serial and Device ID are required','error');return}
     const res=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
-    if(res.ok){toast('Profile created');loadProfiles()}else toast('Failed','error')})}
+    if(res.ok){toast('Profile created');loadProfiles()}else toast((await res.text()).trim()||'Failed','error')})}
 async function editProfile(name){
   const res=await fetch(API);const profiles=await res.json();const p=profiles.find(p=>p.name===name);if(!p)return
   showModal('Edit: '+esc(name),formHTML(p),async()=>{
     const cfg=readForm();cfg.name=name;
     const res=await fetch(API+'/'+name,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
-    if(res.ok){toast('Saved');loadProfiles()}else toast('Failed','error')})}
+    if(res.ok){toast('Saved');loadProfiles()}else toast((await res.text()).trim()||'Failed','error')})}
 async function deleteProfile(name){if(!confirm('Delete "'+name+'"?'))return;const res=await fetch(API+'/'+name,{method:'DELETE'});if(res.ok){toast('Deleted');loadProfiles()}else toast('Failed','error')}
 async function startProfile(name){const res=await fetch(API+'/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,binary:''})});if(res.ok){toast('Starting...');setTimeout(loadProfiles,2500)}else toast('Failed','error')}
 async function stopProfile(name){const res=await fetch(API+'/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});if(res.ok){toast('Stopped');setTimeout(loadProfiles,1000)}else toast('Failed','error')}
