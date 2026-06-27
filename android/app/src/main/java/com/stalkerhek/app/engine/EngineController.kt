@@ -90,6 +90,10 @@ object EngineController {
     private var lastDataDir: String? = null
     private var lastContext: Context? = null
 
+    // Child process for the non-arm64 exec fallback; kept so shutdown()/restart()
+    // can actually stop it instead of leaking it.
+    private var execProcess: Process? = null
+
     fun init(dataDir: String, appContext: Context? = null) {
         if (initCalled) return
         initCalled = true
@@ -129,7 +133,8 @@ object EngineController {
                     Log.i("Stalkerhek", "Exec init: $dataDir")
                     val ctx = appContext ?: throw IllegalStateException("Context required for exec fallback")
                     val binPath = ctx.applicationInfo.nativeLibraryDir + "/libstalkerhek.so"
-                    Runtime.getRuntime().exec(arrayOf(binPath, "-profile", "default", "-db", dataDir))
+                    try { execProcess?.destroy() } catch (_: Exception) {}
+                    execProcess = Runtime.getRuntime().exec(arrayOf(binPath, "-profile", "default", "-db", dataDir))
                     kotlinx.coroutines.delay(3000)
                     _engineState.value = EngineState.Ready(0)
                 }
@@ -156,6 +161,8 @@ object EngineController {
 
     fun shutdown() {
         try { EngineBridge.nativeShutdown() } catch (_: Exception) {}
+        try { execProcess?.destroy() } catch (_: Exception) {}
+        execProcess = null
     }
 
     /** Public refresh — call from UI polling to pick up dashboard changes. */

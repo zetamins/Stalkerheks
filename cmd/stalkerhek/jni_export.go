@@ -314,11 +314,66 @@ func Java_com_stalkerhek_app_engine_EngineBridge_nativeGetProfileStatus(env *C.J
 //export Java_com_stalkerhek_app_engine_EngineBridge_nativeCreateProfile
 func Java_com_stalkerhek_app_engine_EngineBridge_nativeCreateProfile(env *C.JNIEnv, cls C.jclass, jprofileJson C.jstring) C.jstring {
 	jsonStr := readStr(env, jprofileJson)
-	var p db.Profile
-	json.Unmarshal([]byte(jsonStr), &p)
-	store.Save(p)
-	b, _ := json.Marshal(p)
-	return makeStr(env, string(b))
+
+	// The Kotlin ProfileConfig is a FLAT shape (portalUrl/mac/hls_port at the
+	// top level), but db.Profile is nested (portal{...}, services{...}). A plain
+	// Unmarshal into db.Profile would leave portal/services empty, producing an
+	// unusable profile — so map the flat fields explicitly.
+	var f struct {
+		Name         string `json:"name"`
+		PortalURL    string `json:"portalUrl"`
+		MAC          string `json:"mac"`
+		Model        string `json:"model"`
+		SerialNumber string `json:"serial_number"`
+		DeviceID     string `json:"device_id"`
+		DeviceID2    string `json:"device_id2"`
+		Signature    string `json:"signature"`
+		TimeZone     string `json:"timezone"`
+		HLSPort      int    `json:"hls_port"`
+		ProxyPort    int    `json:"proxy_port"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &f); err != nil || f.Name == "" {
+		return makeStr(env, `{"error":"invalid profile JSON or missing name"}`)
+	}
+
+	hlsPort := f.HLSPort
+	if hlsPort == 0 {
+		hlsPort = 9999
+	}
+	proxyPort := f.ProxyPort
+	if proxyPort == 0 {
+		proxyPort = 8888
+	}
+	p := db.Profile{
+		Name: f.Name,
+		Portal: db.PortalConfig{
+			Model:        f.Model,
+			SerialNumber: f.SerialNumber,
+			DeviceID:     f.DeviceID,
+			DeviceID2:    f.DeviceID2,
+			Signature:    f.Signature,
+			MAC:          f.MAC,
+			URL:          f.PortalURL,
+			TimeZone:     f.TimeZone,
+		},
+		Services: db.ServiceConfig{
+			ProxyBind: fmt.Sprintf("0.0.0.0:%d", proxyPort),
+			HLSBind:   fmt.Sprintf("0.0.0.0:%d", hlsPort),
+		},
+	}
+	// Save fills in token/uid_secret (and device_id2/signature are derived on
+	// load), like a profile created through the dashboard.
+	if err := store.Save(p); err != nil {
+		return makeStr(env, fmt.Sprintf(`{"error":%q}`, err.Error()))
+	}
+
+	// Respond in the flat shape Kotlin's ProfileConfig decodes.
+	out, _ := json.Marshal(struct {
+		Name      string `json:"name"`
+		PortalURL string `json:"portalUrl"`
+		MAC       string `json:"mac"`
+	}{p.Name, p.Portal.URL, p.Portal.MAC})
+	return makeStr(env, string(out))
 }
 
 //export Java_com_stalkerhek_app_engine_EngineBridge_nativeDeleteProfile
