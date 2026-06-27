@@ -347,7 +347,10 @@ func (c *RadioChannel) newLinkOnce() (string, error) {
 
 	strs := strings.Split(tmp.Js.Cmd, " ")
 	link = strs[len(strs)-1]
-	link = rewriteMACParam(link, c.Portal.cdnMAC())
+	// Stream on the real MAC the portal already embedded. Unlike live TV, this
+	// path has no 458 retry loop to fall back from, so swapping in a cdn_mac
+	// could only break playback (if the CDN rejects an unregistered MAC), never
+	// bypass a limit. See Channel.newLinkOnce for the live-TV fallback.
 	return link, nil
 }
 
@@ -476,7 +479,9 @@ func (p *Portal) NewVODLink(cmd, series, forcedStorage string) (string, error) {
 	}
 	strs := strings.Split(tmp.Js.Cmd, " ")
 	link = strs[len(strs)-1]
-	link = rewriteMACParam(link, p.cdnMAC())
+	// Stream on the real MAC the portal already embedded — no 458 fallback loop
+	// exists here, so a cdn_mac swap could only break VOD playback. See
+	// Channel.newLinkOnce for the live-TV fallback.
 	return link, nil
 }
 
@@ -545,7 +550,9 @@ func (p *Portal) NewKaraokeLink(cmd string) (string, error) {
 	}
 	strs := strings.Split(tmp.Js.Cmd, " ")
 	link = strs[len(strs)-1]
-	link = rewriteMACParam(link, p.cdnMAC())
+	// Stream on the real MAC the portal already embedded — no 458 fallback loop
+	// exists here, so a cdn_mac swap could only break karaoke playback. See
+	// Channel.newLinkOnce for the live-TV fallback.
 	return link, nil
 }
 
