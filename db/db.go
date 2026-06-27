@@ -203,20 +203,13 @@ func (s *Store) Save(p Profile) error {
 	defer s.mu.Unlock()
 	m, _ := s.readAllLocked()
 
-	// Auto-generate a CDN MAC (distinct from the auth MAC) when absent. The
-	// portal flags the account's auth MAC for anti-sharing and returns HTTP
-	// 458 on stream requests carrying it, but the play_token isn't bound to
-	// the MAC — so streams play when the play URL's mac= is a different value.
-	// cdn_mac is hidden from the UI, so an edit submits an empty value: keep
-	// the existing one across updates and only generate for a brand-new
-	// profile (or one that never had it). See stalker.Portal.cdnMAC.
-	if p.Portal.CDNMac == "" {
-		if old, ok := m[p.Name]; ok && old.Portal.CDNMac != "" {
-			p.Portal.CDNMac = old.Portal.CDNMac
-		} else {
-			p.Portal.CDNMac = RandomCDNMac(p.Portal.MAC)
-		}
-	}
+	// cdn_mac is opt-in: stored exactly as the user provided it (empty => the
+	// stream URLs keep the real auth MAC, the normal working behavior). It is
+	// deliberately NOT auto-generated — forcing a random streaming MAC broke
+	// live playback on portals whose CDN validates mac= against an authorized
+	// device. Set it explicitly only to bypass per-MAC 458 anti-sharing.
+	// See stalker.Portal.cdnMAC.
+	p.Portal.CDNMac = strings.TrimSpace(p.Portal.CDNMac)
 
 	m[p.Name] = p
 	return s.writeAllLocked(m)

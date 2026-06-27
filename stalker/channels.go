@@ -36,6 +36,28 @@ const createLinkRetryDelay = 1 * time.Second
 // createLink) are retried a few times before giving up; the two fatal codes
 // ("nothing_to_play", "link_fault") are never retried.
 func (c *Channel) NewLink(retry bool) (string, error) {
+	return c.newLink(retry, false)
+}
+
+// NewLinkCDNMAC resolves a fresh CDN play URL with the configured cdn_mac
+// substituted into the mac= query parameter. It is the fallback used when
+// streaming on the registered (auth) MAC hits the portal's per-MAC sharing
+// limit (458): the cdn_mac carries its own separate limit, so it yields an
+// extra concurrent stream at the CDN level. Portal/auth/resource requests are
+// unaffected — only the stream play URL's mac= is rewritten. When no distinct
+// cdn_mac is configured this behaves exactly like NewLink (auth MAC).
+func (c *Channel) NewLinkCDNMAC(retry bool) (string, error) {
+	return c.newLink(retry, true)
+}
+
+// HasCDNMAC reports whether a distinct cdn_mac is configured (different from
+// the auth MAC). Callers use it to decide whether a sharing-limit fallback to
+// the cdn_mac is worth attempting.
+func (c *Channel) HasCDNMAC() bool {
+	return c.Portal.CDNMac != ""
+}
+
+func (c *Channel) newLink(retry, useCDNMAC bool) (string, error) {
 	attempts := 1
 	if retry {
 		attempts = createLinkMaxAttempts
@@ -43,7 +65,7 @@ func (c *Channel) NewLink(retry bool) (string, error) {
 
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		link, err := c.newLinkOnce()
+		link, err := c.newLinkOnce(useCDNMAC)
 		if err == nil {
 			return link, nil
 		}
@@ -70,7 +92,7 @@ func isTransientCreateLinkError(err error) bool {
 	return strings.Contains(err.Error(), "temporary_unavailable")
 }
 
-func (c *Channel) newLinkOnce() (string, error) {
+func (c *Channel) newLinkOnce(useCDNMAC bool) (string, error) {
 	type tmpStruct struct {
 		Js struct {
 			Cmd   string `json:"cmd"`
@@ -106,7 +128,13 @@ func (c *Channel) newLinkOnce() (string, error) {
 
 	strs := strings.Split(tmp.Js.Cmd, " ")
 	link = strs[len(strs)-1]
-	link = rewriteMACParam(link, c.Portal.cdnMAC())
+	// Normal playback streams on the registered (auth) MAC the portal already
+	// embedded in mac=. Only swap to the cdn_mac when the caller is doing a
+	// sharing-limit (458) fallback — that keeps the alternate MAC unused (and
+	// therefore unflagged by the CDN) until it is actually needed.
+	if useCDNMAC {
+		link = rewriteMACParam(link, c.Portal.cdnMAC())
+	}
 	return link, nil
 }
 

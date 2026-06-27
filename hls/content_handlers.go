@@ -45,10 +45,25 @@ func (inst *Instance) handleContentUnknown(cr *ContentRequest) {
 	// connect timeouts. Each retry re-mints a fresh play_token (and a fresh
 	// CDN edge), which is what actually clears a 458 or a per-edge 509.
 	backoffs := []time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second}
+	// sharingLimited becomes true once the registered (auth) MAC hits the
+	// portal's per-MAC sharing limit (458). From then on we re-resolve the link
+	// with the configured cdn_mac, which carries its own separate limit and so
+	// bypasses the cap at the CDN level. The cdn_mac stays unused until this
+	// point, keeping it unflagged for when it is genuinely needed.
+	sharingLimited := false
 	for attempt := 0; attempt <= len(backoffs); attempt++ {
 		if attempt > 0 {
-			// Get a fresh CDN URL with new play_token from the portal
-			if newLink, linkErr := cr.ChannelRef.StalkerChannel.NewLink(true); linkErr == nil {
+			// Get a fresh CDN URL with new play_token from the portal. On a
+			// sharing-limit fallback, mint it on the cdn_mac instead of the
+			// auth MAC.
+			var newLink string
+			var linkErr error
+			if sharingLimited && cr.ChannelRef.StalkerChannel.HasCDNMAC() {
+				newLink, linkErr = cr.ChannelRef.StalkerChannel.NewLinkCDNMAC(true)
+			} else {
+				newLink, linkErr = cr.ChannelRef.StalkerChannel.NewLink(true)
+			}
+			if linkErr == nil {
 				cr.ChannelRef.Link = newLink
 			}
 		}
@@ -61,6 +76,11 @@ func (inst *Instance) handleContentUnknown(cr *ContentRequest) {
 			// with a fresh play_token on the next attempt.
 			var se *httpStatusError
 			if errors.As(err, &se) && (se.code == 458 || se.code >= 500) && attempt < len(backoffs) {
+				// A 458 specifically means the auth MAC is over its sharing
+				// limit; switch subsequent re-resolves to the cdn_mac.
+				if se.code == 458 {
+					sharingLimited = true
+				}
 				time.Sleep(backoffs[attempt])
 				continue
 			}

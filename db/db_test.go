@@ -4,8 +4,6 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 	"testing"
 )
 
@@ -116,15 +114,10 @@ func TestSaveAutoDefaults(t *testing.T) {
 	if got.Services.HLSBind != "0.0.0.0:9999" {
 		t.Errorf("default HLSBind = %q", got.Services.HLSBind)
 	}
-	// cdn_mac is auto-generated, distinct from the auth MAC, valid format.
-	if got.Portal.CDNMac == "" {
-		t.Error("CDNMac should be auto-generated when empty")
-	}
-	if strings.EqualFold(got.Portal.CDNMac, got.Portal.MAC) {
-		t.Errorf("CDNMac %q must differ from auth MAC %q", got.Portal.CDNMac, got.Portal.MAC)
-	}
-	if !regexp.MustCompile(`^[0-9A-F]{2}(:[0-9A-F]{2}){5}$`).MatchString(got.Portal.CDNMac) {
-		t.Errorf("CDNMac %q is not a valid uppercase MAC", got.Portal.CDNMac)
+	// cdn_mac is opt-in: when not provided it stays empty (cdnMAC() then falls
+	// back to the auth MAC). It is no longer auto-generated.
+	if got.Portal.CDNMac != "" {
+		t.Errorf("CDNMac should stay empty when not provided, got %q", got.Portal.CDNMac)
 	}
 }
 
