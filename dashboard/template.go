@@ -134,11 +134,11 @@ async function loadProfiles(){
     (p.status==='running'?'<div class="card-info" style="margin-top:2px">PID: '+p.pid+'</div>':'')+
     '<div class="card-actions">'+
     (p.status==='running'
-      ?'<button class="btn btn-sm btn-outline" onclick="stopProfile(\''+esc(p.name)+'\')"><i class="fa-solid fa-stop"></i>Stop</button>'
-      :'<button class="btn btn-sm btn-brand" onclick="startProfile(\''+esc(p.name)+'\')"><i class="fa-solid fa-play"></i>Start</button>')+
-    '<button class="btn btn-sm btn-outline" onclick="viewLogs(\''+esc(p.name)+'\')"><i class="fa-solid fa-file-lines"></i>Logs</button>'+
-    '<button class="btn btn-sm btn-outline" onclick="editProfile(\''+esc(p.name)+'\')"><i class="fa-solid fa-pen-to-square"></i>Edit</button>'+
-    '<button class="btn btn-sm btn-red" onclick="deleteProfile(\''+esc(p.name)+'\')"><i class="fa-solid fa-trash"></i>Delete</button>'+
+      ?'<button class="btn btn-sm btn-outline" onclick="stopProfile(\''+jsAttr(p.name)+'\')"><i class="fa-solid fa-stop"></i>Stop</button>'
+      :'<button class="btn btn-sm btn-brand" onclick="startProfile(\''+jsAttr(p.name)+'\')"><i class="fa-solid fa-play"></i>Start</button>')+
+    '<button class="btn btn-sm btn-outline" onclick="viewLogs(\''+jsAttr(p.name)+'\')"><i class="fa-solid fa-file-lines"></i>Logs</button>'+
+    '<button class="btn btn-sm btn-outline" onclick="editProfile(\''+jsAttr(p.name)+'\')"><i class="fa-solid fa-pen-to-square"></i>Edit</button>'+
+    '<button class="btn btn-sm btn-red" onclick="deleteProfile(\''+jsAttr(p.name)+'\')"><i class="fa-solid fa-trash"></i>Delete</button>'+
     '</div></div>').join('')}
 function addProfile(){
   showModal('New Profile',formHTML({}),async()=>{
@@ -147,17 +147,17 @@ function addProfile(){
     if(res.ok){toast('Profile created');loadProfiles()}else toast('Failed','error')})}
 async function editProfile(name){
   const res=await fetch(API);const profiles=await res.json();const p=profiles.find(p=>p.name===name);if(!p)return
-  showModal('Edit: '+name,formHTML(p),async()=>{
+  showModal('Edit: '+esc(name),formHTML(p),async()=>{
     const cfg=readForm();cfg.name=name;
     const res=await fetch(API+'/'+name,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
     if(res.ok){toast('Saved');loadProfiles()}else toast('Failed','error')})}
 async function deleteProfile(name){if(!confirm('Delete "'+name+'"?'))return;const res=await fetch(API+'/'+name,{method:'DELETE'});if(res.ok){toast('Deleted');loadProfiles()}else toast('Failed','error')}
 async function startProfile(name){const res=await fetch(API+'/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,binary:''})});if(res.ok){toast('Starting...');setTimeout(loadProfiles,2500)}else toast('Failed','error')}
 async function stopProfile(name){const res=await fetch(API+'/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});if(res.ok){toast('Stopped');setTimeout(loadProfiles,1000)}else toast('Failed','error')}
-async function viewLogs(name){const res=await fetch(API+'/logs?name='+encodeURIComponent(name));const text=await res.text();showModal('Logs: '+name,'<div class="log-viewer">'+esc(text||'No logs yet')+'</div>')}
+async function viewLogs(name){const res=await fetch(API+'/logs?name='+encodeURIComponent(name));const text=await res.text();showModal('Logs: '+esc(name),'<div class="log-viewer">'+esc(text||'No logs yet')+'</div>')}
 function showLogSelector(){
   fetch(API).then(r=>r.json()).then(profiles=>{document.getElementById('content').innerHTML=profiles.map(p=>
-    '<div class="card"><div class="card-title">'+esc(p.name)+'</div><button class="btn btn-sm btn-outline" style="margin-top:8px" onclick="viewLogs(\''+esc(p.name)+'\')"><i class="fa-solid fa-file-lines"></i> View Logs</button></div>').join('')})}
+    '<div class="card"><div class="card-title">'+esc(p.name)+'</div><button class="btn btn-sm btn-outline" style="margin-top:8px" onclick="viewLogs(\''+jsAttr(p.name)+'\')"><i class="fa-solid fa-file-lines"></i> View Logs</button></div>').join('')})}
 function formHTML(cfg){const p=cfg.portal||{};const s=cfg.services||{}
   return'<div class="form-row"><div class="form-group"><label>Profile Name *</label><input id="f-name" value="'+esc(cfg.name||'')+'" placeholder="my-profile"></div><div class="form-group"><label>Model</label><input id="f-model" value="'+esc(p.model||'MAG254')+'" placeholder="MAG254"></div></div>'+
     '<div class="form-row"><div class="form-group"><label>Serial Number *</label><input id="f-sn" value="'+esc(p.serial_number||'')+'" placeholder="0000000000000"></div><div class="form-group"><label>MAC Address *</label><input id="f-mac" value="'+esc(p.mac||'')+'" placeholder="00:00:00:00:00:00"></div></div>'+
@@ -175,6 +175,7 @@ function showModal(title,body,onSave){document.getElementById('modal-container')
 function closeModal(){document.getElementById('modal-container').innerHTML=''}
 function toast(msg,type){type=type||'success';const el=document.createElement('div');el.className='toast toast-'+type;el.textContent=msg;document.getElementById('toast-container').appendChild(el);setTimeout(()=>el.remove(),2500)}
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function jsAttr(s){return esc((s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'"))}
 function makeQR(text){try{var q=qrcode(0,'M');q.addData(text);q.make();return q.createDataURL(6,4)}catch(e){return''}}
 loadProfiles();setInterval(()=>{if(currentTab==='profiles')loadProfiles()},10000)
 </script>

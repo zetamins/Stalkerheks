@@ -278,6 +278,10 @@ func handleProfileByID(w http.ResponseWriter, r *http.Request) {
 	if name == "" || name == "start" || name == "stop" || name == "logs" {
 		return
 	}
+	if !validProfileName(name) {
+		http.Error(w, "invalid name", 400)
+		return
+	}
 
 	switch r.Method {
 	case "PUT":
@@ -378,8 +382,8 @@ func handleProfileStop(w http.ResponseWriter, r *http.Request) {
 
 func handleProfileLogs(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
-	if name == "" {
-		http.Error(w, "missing name", 400)
+	if !validProfileName(name) {
+		http.Error(w, "invalid name", 400)
 		return
 	}
 	logPath := filepath.Join(profDir, name+".log")
@@ -415,4 +419,16 @@ func stopProcess(name string) {
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+// validProfileName guards the filesystem-touching handlers: a profile name is
+// used as a single path element for its <name>.log file, so it must not contain
+// path separators or parent references. Without this, /api/profiles/logs?name=
+// (a query param, which ServeMux does NOT path-clean) could read arbitrary
+// .log files via "../" traversal.
+func validProfileName(name string) bool {
+	if name == "" || name != filepath.Base(name) || strings.Contains(name, "..") {
+		return false
+	}
+	return !strings.ContainsAny(name, `/\`+"\x00")
 }
