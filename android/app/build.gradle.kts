@@ -60,6 +60,12 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        jniLibs {
+            // The exec fallback (EngineController) runs libstalkerhek.so as a
+            // subprocess from nativeLibraryDir, so the .so must be a real file
+            // on disk, not mmap'd from the APK. Pairs with extractNativeLibs.
+            useLegacyPackaging = true
+        }
     }
 }
 
