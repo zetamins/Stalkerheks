@@ -1,6 +1,8 @@
 package com.stalkerhek.app.tv
 
+import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.foundation.Image
@@ -38,7 +40,12 @@ fun QrCodeScreen() {
     val mgmtPort = 8080
     val mgmtUrl = "http://$localIp:$mgmtPort"
     val isRunning = profile?.running == true
-    val scope = rememberCoroutineScope()
+
+    // Two-column layout is for the TV (landscape) only; phones stay single column.
+    val isTv = remember {
+        val ui = context.getSystemService(Context.UI_MODE_SERVICE) as android.app.UiModeManager
+        ui.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
+    }
 
     // Auto-refresh profile status every 5s to pick up dashboard changes
     LaunchedEffect(Unit) {
@@ -93,129 +100,147 @@ fun QrCodeScreen() {
 
         Spacer(Modifier.height(28.dp))
 
-        // Two-column layout: QR/URL on the left, status + actions on the right.
-        // TVs are landscape, so splitting the body fills the width and keeps
-        // everything on one screen without scrolling.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(40.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Left column — QR code + dashboard URL
-            Column(
-                modifier = Modifier.weight(1f),
-                horizontalAlignment = Alignment.CenterHorizontally
+        val proxyUrl = "http://$localIp:" + (profile?.proxyAddr?.substringAfter(":") ?: "8888")
+        val hlsUrl = "http://$localIp:" + (profile?.hlsAddr?.substringAfter(":") ?: "9999")
+        val channelsCount = profile?.channelsCount ?: 0
+
+        if (isTv) {
+            // TV (landscape): two columns — QR/URL left, status + actions right.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(40.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                // QR Code in white box
-                Box(
-                    modifier = Modifier
-                        .size(280.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color.White)
-                        .padding(16.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    qrBitmap?.let {
-                        Image(
-                            bitmap = it.asImageBitmap(),
-                            contentDescription = "Dashboard QR Code",
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(20.dp))
-
-                // Dashboard URL
-                Text(
-                    mgmtUrl,
-                    color = Color(0xFF2D8A4E),
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center
-                )
-
-                Spacer(Modifier.height(4.dp))
-
-                Text(
-                    "Scan or open in browser to manage profiles",
-                    color = Color(0xFF6B806D),
-                    fontSize = 13.sp,
-                    textAlign = TextAlign.Center
+                QrSection(mgmtUrl, qrBitmap, Modifier.weight(1f))
+                StatusSection(
+                    mgmtUrl, isRunning, proxyUrl, hlsUrl, channelsCount,
+                    profiles.size, Modifier.weight(1f)
                 )
             }
-
-            // Right column — status cards + action buttons
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // Server info cards — update dynamically
-                InfoRow(label = "Dashboard", value = mgmtUrl)
-                if (isRunning) {
-                    val proxyUrl = "http://$localIp:" + (profile?.proxyAddr?.substringAfter(":") ?: "8888")
-                    val hlsUrl = "http://$localIp:" + (profile?.hlsAddr?.substringAfter(":") ?: "9999")
-                    InfoRow(label = "Proxy", value = proxyUrl)
-                    InfoRow(label = "HLS Stream", value = hlsUrl)
-                    InfoRow(
-                        label = "Profile",
-                        value = "Active — ${profile!!.channelsCount} channels"
-                    )
-                } else {
-                    InfoRow(label = "Proxy", value = "Not running")
-                    InfoRow(
-                        label = "Profiles",
-                        value = if (profiles.isEmpty()) "None configured" else "${profiles.size} configured"
-                    )
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                // Open Dashboard button — launches the device's default browser
-                // at 127.0.0.1 (loopback), not the LAN IP, so managing profiles on
-                // this device is always fast: the dashboard server runs in this
-                // same process via JNI, and loopback never round-trips through the
-                // Wi-Fi router (unlike the LAN IP shown in the QR code above,
-                // which is for *other* devices to scan).
-                Button(
-                    onClick = {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("http://127.0.0.1:8080/"))
-                        context.startActivity(intent)
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF2D8A4E),
-                        contentColor = Color.White
-                    ),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) {
-                    Text(
-                        "Open Dashboard",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-
-                // Restart Engine button
-                Button(
-                    onClick = { EngineController.restart() },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF1A2C1F),
-                        contentColor = Color(0xFF2D8A4E)
-                    ),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) {
-                    Text(
-                        "Restart Engine",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
+        } else {
+            // Phone (portrait): single stacked column.
+            QrSection(mgmtUrl, qrBitmap, Modifier.fillMaxWidth())
+            Spacer(Modifier.height(24.dp))
+            StatusSection(
+                mgmtUrl, isRunning, proxyUrl, hlsUrl, channelsCount,
+                profiles.size, Modifier.fillMaxWidth()
+            )
         }
 
         Spacer(Modifier.height(32.dp))
+    }
+}
+
+/** QR code + dashboard URL + scan hint. */
+@Composable
+private fun QrSection(mgmtUrl: String, qrBitmap: Bitmap?, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // QR Code in white box
+        Box(
+            modifier = Modifier
+                .size(280.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color.White)
+                .padding(16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            qrBitmap?.let {
+                Image(
+                    bitmap = it.asImageBitmap(),
+                    contentDescription = "Dashboard QR Code",
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        Text(
+            mgmtUrl,
+            color = Color(0xFF2D8A4E),
+            fontSize = 22.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(Modifier.height(4.dp))
+
+        Text(
+            "Scan or open in browser to manage profiles",
+            color = Color(0xFF6B806D),
+            fontSize = 13.sp,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+/** Server status cards + action buttons. */
+@Composable
+private fun StatusSection(
+    mgmtUrl: String,
+    isRunning: Boolean,
+    proxyUrl: String,
+    hlsUrl: String,
+    channelsCount: Int,
+    profilesCount: Int,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // Server info cards — update dynamically
+        InfoRow(label = "Dashboard", value = mgmtUrl)
+        if (isRunning) {
+            InfoRow(label = "Proxy", value = proxyUrl)
+            InfoRow(label = "HLS Stream", value = hlsUrl)
+            InfoRow(label = "Profile", value = "Active — $channelsCount channels")
+        } else {
+            InfoRow(label = "Proxy", value = "Not running")
+            InfoRow(
+                label = "Profiles",
+                value = if (profilesCount == 0) "None configured" else "$profilesCount configured"
+            )
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Open Dashboard button — launches the device's default browser at
+        // 127.0.0.1 (loopback), not the LAN IP, so managing profiles on this
+        // device is always fast: the dashboard server runs in this same
+        // process via JNI, and loopback never round-trips through the Wi-Fi
+        // router (unlike the LAN IP in the QR code, which is for other devices).
+        Button(
+            onClick = {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("http://127.0.0.1:8080/"))
+                context.startActivity(intent)
+            },
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF2D8A4E),
+                contentColor = Color.White
+            ),
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.fillMaxWidth().height(48.dp)
+        ) {
+            Text("Open Dashboard", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        }
+
+        // Restart Engine button
+        Button(
+            onClick = { EngineController.restart() },
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF1A2C1F),
+                contentColor = Color(0xFF2D8A4E)
+            ),
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.fillMaxWidth().height(48.dp)
+        ) {
+            Text("Restart Engine", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 
