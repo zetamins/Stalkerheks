@@ -197,8 +197,9 @@ func startProfileInProcess(name string) error {
 		}
 	}()
 
-	// Register as running with a real stop function.
-	inProcessRunning[name] = func() {
+	// Register as running with a real stop function. Locked because callers no
+	// longer hold procMu around the starter (see handleProfileStart).
+	stop := func() {
 		c.Portal.StopWatchdog()
 		if c.HLS.Enabled {
 			hlsInst.Stop()
@@ -210,6 +211,9 @@ func startProfileInProcess(name string) error {
 		delete(inProcessInstances, name)
 		inProcessInstancesMu.Unlock()
 	}
+	procMu.Lock()
+	inProcessRunning[name] = stop
+	procMu.Unlock()
 
 	log.Printf("Started profile %s in-process (HLS=%s Proxy=%s)", name, c.HLS.Bind, c.Proxy.Bind)
 	_ = p
@@ -320,9 +324,7 @@ func handleProfileByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, map[string]string{"ok": "saved"})
 	case "DELETE":
-		procMu.Lock()
-		stopProcess(name)
-		procMu.Unlock()
+		stopProcess(name) // self-locking; must not hold procMu (re-entered via MarkStopped)
 		store.Delete(name)
 		os.Remove(filepath.Join(profDir, name+".log"))
 		writeJSON(w, map[string]string{"ok": "deleted"})
@@ -357,9 +359,8 @@ func handleProfileStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	procMu.Lock()
-	defer procMu.Unlock()
-
+	// stopProcess and the in-process starter both do their own procMu locking and
+	// re-enter it (MarkStopped/MarkRunning), so we must not hold procMu here.
 	stopProcess(req.Name)
 
 	// In JNI/Android mode, start profiles in-process instead of spawning a binary.
@@ -386,7 +387,9 @@ func handleProfileStart(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"error": "failed to start: " + err.Error()})
 		return
 	}
+	procMu.Lock()
 	processes[req.Name] = cmd.Process
+	procMu.Unlock()
 	log.Printf("Started profile %s (PID %d, binary %s)", req.Name, cmd.Process.Pid, req.Binary)
 	writeJSON(w, map[string]interface{}{"ok": "started", "pid": cmd.Process.Pid})
 }
@@ -403,9 +406,7 @@ func handleProfileStop(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", 400)
 		return
 	}
-	procMu.Lock()
-	defer procMu.Unlock()
-	stopProcess(req.Name)
+	stopProcess(req.Name) // self-locking; must not hold procMu (re-entered via MarkStopped)
 	writeJSON(w, map[string]string{"ok": "stopped"})
 }
 
@@ -424,23 +425,33 @@ func handleProfileLogs(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// stopProcess stops a running profile, however it was started. Callers must
-// hold procMu. Real subprocesses (standalone-binary mode) are killed; an
-// in-process profile (JNI/Android mode) is stopped via its own stop
-// function — it must never be Kill()ed, since there's no separate OS
-// process for it and the registered handle previously pointed at this
-// process's own PID, which would take down the whole engine.
+// stopProcess stops a running profile, however it was started. It manages its
+// own procMu locking — callers must NOT hold procMu. Real subprocesses
+// (standalone-binary mode) are Kill()ed; an in-process profile (JNI/Android
+// mode) is stopped via its own stop function — it must never be Kill()ed, since
+// there's no separate OS process for it.
+//
+// The in-process stop function is invoked AFTER procMu is released: the JNI stop
+// path re-enters procMu (its stop closure calls MarkStopped), so calling it with
+// procMu held would self-deadlock. We snapshot and delete the handle under the
+// lock, then call it unlocked.
 func stopProcess(name string) {
+	procMu.Lock()
 	if proc, ok := processes[name]; ok {
+		delete(processes, name)
+		procMu.Unlock()
 		proc.Kill()
 		proc.Wait()
-		delete(processes, name)
 		log.Printf("Stopped profile %s", name)
 		return
 	}
-	if stop, ok := inProcessRunning[name]; ok {
-		stop()
+	stop, ok := inProcessRunning[name]
+	if ok {
 		delete(inProcessRunning, name)
+	}
+	procMu.Unlock()
+	if ok && stop != nil {
+		stop()
 		log.Printf("Stopped in-process profile %s", name)
 	}
 }
