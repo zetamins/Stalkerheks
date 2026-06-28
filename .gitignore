@@ -3,9 +3,13 @@
 !/.travis.yml
 
 /stalkerhek
-android/app/src/main/assets/stalkerhek
-android/app/src/main/assets/stalkerhek-arm
 ChatGPT*.png
+
+# Generated native build artifacts — produced by android/build_apk.sh and CI,
+# never committed (engine .so must be built per-ABI from source).
+android/app/src/main/assets/stalkerhek*
+android/app/src/main/jniLibs/**/*.so
+android/app/src/main/jniLibs/**/*.h
 
 # Local tooling artifacts (knowledge graph + Claude Code)
 /graphify-out/
