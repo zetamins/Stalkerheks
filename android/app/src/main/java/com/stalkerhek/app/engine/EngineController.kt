@@ -1,7 +1,6 @@
 package com.stalkerhek.app.engine
 
 import android.content.Context
-import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -102,8 +101,18 @@ object EngineController {
         _engineState.value = EngineState.Initializing
         scope.launch {
             try {
-                val isArm64 = Build.SUPPORTED_ABIS.isNotEmpty() && Build.SUPPORTED_ABIS[0].contains("arm64")
-                if (isArm64) {
+                // The in-process JNI engine is now built for every ABI, so prefer
+                // it on all devices (it binds the dashboard on 0.0.0.0:8080). Only
+                // drop to the exec fallback if the native library genuinely can't
+                // be loaded on this device.
+                val jniAvailable = try {
+                    EngineBridge.ensureLoaded()
+                    true
+                } catch (e: Throwable) {
+                    Log.w("Stalkerhek", "JNI engine unavailable, using exec fallback", e)
+                    false
+                }
+                if (jniAvailable) {
                     Log.i("Stalkerhek", "JNI init: $dataDir")
                     val result = EngineBridge.nativeInit(dataDir)
                     Log.i("Stalkerhek", "JNI result: $result")

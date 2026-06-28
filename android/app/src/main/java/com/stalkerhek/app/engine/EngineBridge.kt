@@ -5,6 +5,13 @@ object EngineBridge {
         System.loadLibrary("stalkerhek_engine")
     }
 
+    /**
+     * Force the native library to load (triggers the init block above).
+     * Throws UnsatisfiedLinkError / ExceptionInInitializerError if the engine
+     * .so is missing or unloadable for this ABI, letting callers fall back.
+     */
+    fun ensureLoaded() {}
+
     /** Initialize the engine with Android internal storage path. Returns JSON status. */
     external fun nativeInit(dataDir: String): String
 
