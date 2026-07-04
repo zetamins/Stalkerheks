@@ -16,6 +16,14 @@
          dashboard ports take minutes to respond. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Declared but not required, so the app stays installable on phones
+         (no leanback UI/touchscreen) as well as Android TV/Google TV
+         devices (no touchscreen). Without these, some device/Play Store
+         filtering treats the app as touchscreen-only and TV devices never
+         see it as installable. -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
     <application
         android:name=".StalkerApplication"
         android:allowBackup="false"
@@ -35,6 +43,10 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <!-- Required for the app to appear (with its banner) on the
+                     Android TV/Google TV home screen — that launcher queries
+                     LEANBACK_LAUNCHER specifically, not just LAUNCHER. -->
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
 
