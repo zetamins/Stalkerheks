@@ -27,12 +27,14 @@ import (
 //
 // Known real call patterns (from the JS API docs and Itv.php usage):
 //
-//	GetUID()                  -> device_id  (persistent hardware ID; Stalkerhek
-//	                              treats this one as directly configured instead,
-//	                              since operators need to match an
-//	                              already-authorized real device's value)
+//	GetUID()                  -> device_id
 //	GetUID(random)             -> signature  (keyed by the handshake's random)
 //	GetUID("device_id", token) -> device_id2 (keyed by token)
+//
+// device_id/device_id2/signature are now primarily resolved via the verified
+// MAC-based derivation instead (identity.go, LoadProfile, Portal.signature)
+// — this HMAC scheme only remains as a fallback for a Portal built without a
+// SerialNumber/MAC to derive from.
 func (p *Portal) GetUID(args ...string) string {
 	mac := hmac.New(sha256.New, []byte(p.UIDSecret))
 	for _, a := range args {
@@ -43,12 +45,17 @@ func (p *Portal) GetUID(args ...string) string {
 }
 
 // signature resolves the get_profile "signature" param: a manually
-// configured override if set, otherwise GetUID(random) — real hardware
-// recomputes this fresh per handshake since it's keyed by the handshake's
-// random nonce, not a static stored value.
+// configured override if set; otherwise the verified real-portal derivation
+// (SHA256(sn+mac), see identity.go/fix.md) once sn and MAC are known — which
+// LoadProfile fills in eagerly, so this branch mainly matters for a Portal
+// built outside LoadProfile; otherwise GetUID(random) as a last-resort
+// emulation for the case sn/MAC aren't available at all.
 func (p *Portal) signature() string {
 	if p.Signature != "" {
 		return p.Signature
+	}
+	if p.SerialNumber != "" && p.MAC != "" {
+		return deriveSignature(p.SerialNumber, p.MAC)
 	}
 	if p.UIDSecret == "" {
 		return ""

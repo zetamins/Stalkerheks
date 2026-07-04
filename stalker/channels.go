@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -28,6 +29,16 @@ const createLinkMaxAttempts = 3
 
 // createLinkRetryDelay is the wait between transient create_link retries.
 const createLinkRetryDelay = 1 * time.Second
+
+// retrieveChannelsMaxAttempts caps retries for transient get_all_channels
+// errors (a multi-MB response is more likely to hit a timeout under
+// concurrent load from other profiles than the small single-object calls).
+const retrieveChannelsMaxAttempts = 3
+
+// retrieveChannelsRetryDelay is the wait between transient get_all_channels
+// retries. Longer than createLinkRetryDelay since the failure mode here is
+// contention/load clearing, not a single CDN hiccup.
+const retrieveChannelsRetryDelay = 2 * time.Second
 
 // NewLink retrieves a link to the working channel. Retrieved link can be
 // played in VLC or Kodi, but expires very soon if not being constantly
@@ -80,16 +91,29 @@ func (c *Channel) newLink(retry, useCDNMAC bool) (string, error) {
 }
 
 func isTransientCreateLinkError(err error) bool {
-	// Transient upstream/CDN hiccups — the portal returning HTTP 5xx (500,
-	// 502, 503, 520, 522, …) clears on retry, like a real STB re-issuing
-	// create_link a moment later. 4xx (auth, not-found) are fatal.
-	var se *httpStatusError
-	if errors.As(err, &se) {
-		return se.code >= 500
+	if isTransientHTTPError(err) {
+		return true
 	}
 	// Real STB treats "limit" as FATAL (shows notice, does not retry).
 	// Only "temporary_unavailable" is retried on create_link level.
 	return strings.Contains(err.Error(), "temporary_unavailable")
+}
+
+// isTransientHTTPError reports whether err looks like a passing
+// network/server hiccup worth retrying — the portal returning HTTP 5xx (500,
+// 502, 503, 520, 522, …), like a real STB re-issuing the request a moment
+// later, or a client-side timeout (e.g. get_all_channels's multi-MB response
+// blowing past the header/read deadline under concurrent load from other
+// profiles sharing this process). 4xx (auth, not-found) and JSON decode
+// errors are fatal — retrying those just wastes time on a request that will
+// fail the same way again.
+func isTransientHTTPError(err error) bool {
+	var se *httpStatusError
+	if errors.As(err, &se) {
+		return se.code >= 500
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func (c *Channel) newLinkOnce(useCDNMAC bool) (string, error) {
@@ -174,9 +198,18 @@ func (p *Portal) RetrieveChannels() (map[string]*Channel, error) {
 	}
 	var tmp tmpStruct
 
-	content, err := p.httpRequest(p.Location + "?type=itv&action=get_all_channels&JsHttpRequest=1-xml")
-	if err != nil {
-		return nil, err
+	var content []byte
+	var err error
+	for attempt := 1; attempt <= retrieveChannelsMaxAttempts; attempt++ {
+		content, err = p.httpRequest(p.Location + "?type=itv&action=get_all_channels&JsHttpRequest=1-xml")
+		if err == nil {
+			break
+		}
+		if !isTransientHTTPError(err) || attempt == retrieveChannelsMaxAttempts {
+			return nil, err
+		}
+		log.Println("get_all_channels transient failure, retrying:", err)
+		time.Sleep(retrieveChannelsRetryDelay)
 	}
 
 	// Dump json output to file

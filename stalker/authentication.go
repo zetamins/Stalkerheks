@@ -16,45 +16,48 @@ import (
 // redirects is kept (unlike httpRedirectClient) to preserve the original
 // handshake behavior; only the timeouts are added.
 var handshakeClient = &http.Client{
-	Timeout: 30 * time.Second,
+	// Shares the same shared-client-under-concurrent-load reasoning as
+	// httpRedirectClient (stalker.go) — this process boots one goroutine per
+	// profile, and all of them race their handshake through this one client.
+	Timeout: 60 * time.Second,
 	Transport: &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   10 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
 		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 15 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
 	},
 }
 
+// handshakeMaxAttempts caps retries for transient handshake errors — same
+// contention pattern as RetrieveChannels (channels.go): under concurrent
+// multi-profile load a single timeout doesn't mean the portal is down.
+const handshakeMaxAttempts = 3
+
+// handshakeRetryDelay is the wait between transient handshake retries.
+const handshakeRetryDelay = 2 * time.Second
+
 // Handshake reserves a offered token in Portal. If offered token is not available - new one will be issued by stalker portal and Stalker's config will be updated.
 func (p *Portal) handshake() error {
-	// This HTTP request has different headers from the rest of HTTP requests, so perform it manually
+	var contents []byte
+	var err error
+	for attempt := 1; attempt <= handshakeMaxAttempts; attempt++ {
+		contents, err = p.handshakeOnce()
+		if err == nil {
+			break
+		}
+		if !isTransientHTTPError(err) || attempt == handshakeMaxAttempts {
+			return err
+		}
+		log.Println("handshake transient failure, retrying:", err)
+		time.Sleep(handshakeRetryDelay)
+	}
+
 	type tmpStruct struct {
 		Js map[string]interface{} `json:"js"`
 	}
 	var tmp tmpStruct
-
-	req, err := http.NewRequest("GET", p.Location+"?type=stb&action=handshake&token="+p.Token+"&JsHttpRequest=1-xml", nil)
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("User-Agent", p.UserAgent())
-	req.Header.Set("X-User-Agent", "Model: "+p.Model+"; Link: Ethernet")
-	// Real MAG STB: no SN header, cookie = mac/stb_lang/timezone only.
-	req.Header.Set("Cookie", "mac="+p.MAC+"; stb_lang=en; timezone="+p.TimeZone)
-
-	resp, err := handshakeClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	contents, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
 
 	if err = json.Unmarshal(contents, &tmp); err != nil {
 		log.Println(string(contents))
@@ -81,4 +84,27 @@ func (p *Portal) handshake() error {
 		p.Token = s
 	}
 	return nil
+}
+
+// handshakeOnce performs a single handshake HTTP call and returns the raw
+// response body. This HTTP request has different headers from the rest of
+// HTTP requests, so it's performed manually rather than via httpRequest.
+func (p *Portal) handshakeOnce() ([]byte, error) {
+	req, err := http.NewRequest("GET", p.Location+"?type=stb&action=handshake&token="+p.Token+"&JsHttpRequest=1-xml", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("User-Agent", p.UserAgent())
+	req.Header.Set("X-User-Agent", "Model: "+p.Model+"; Link: Ethernet")
+	// Real MAG STB: no SN header, cookie = mac/stb_lang/timezone only.
+	req.Header.Set("Cookie", "mac="+p.MAC+"; stb_lang=en; timezone="+p.TimeZone)
+
+	resp, err := handshakeClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	return ioutil.ReadAll(resp.Body)
 }

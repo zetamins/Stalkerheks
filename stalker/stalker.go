@@ -116,14 +116,19 @@ func (p *Portal) StopWatchdog() {
 // redirect chains. httpRequest follows redirects itself instead, reapplying
 // the full header set on every hop.
 var httpRedirectClient = &http.Client{
-	// Overall per-request cap. The portal API calls are small JSON, so a
+	// Overall per-request cap. Most portal API calls are small JSON, so a
 	// bounded timeout is safe here (this client never streams media — that's
 	// the proxy/hls clients). Without it, a single un-timed call could hang
 	// for the OS-level TCP timeout: on devices that get a black-holed IPv6
 	// address (common on Huawei/EMUI when DNS returns only AAAA, with no IPv4
 	// to race against), the ~7 sequential boot calls stacked up into a
 	// many-minute startup during which the proxy/HLS ports never even bound.
-	Timeout: 30 * time.Second,
+	// get_all_channels is the exception — a real portal's response can run
+	// into several MB of JSON, and this client is shared by every concurrently
+	// running profile (the Android app boots one goroutine per profile), so
+	// the header wait needs enough slack to survive that contention rather
+	// than the tighter bound that's fine for the small single-object calls.
+	Timeout: 60 * time.Second,
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	},
@@ -135,7 +140,7 @@ var httpRedirectClient = &http.Client{
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
 		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 15 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		MaxIdleConns:          8,
 		IdleConnTimeout:       90 * time.Second,

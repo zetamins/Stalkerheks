@@ -165,16 +165,30 @@ func LoadProfile(store *db.Store, name string) (*Config, error) {
 		},
 	}
 
-	// device_id2 is keyed only by device_id+token (both already known), so
-	// it can be resolved once here rather than persisted — unlike signature
-	// (keyed by the handshake's random, which doesn't exist yet), it's safe
-	// to fill in eagerly. A manually-configured value (e.g. matching an
-	// already-authorized real device) is left untouched. This must run
-	// before validate() below, since validate() requires DeviceID2 to be
-	// non-empty — every freshly auto-generated profile has it empty until
-	// derived here.
-	if c.Portal.DeviceID2 == "" && c.Portal.DeviceID != "" && c.Portal.UIDSecret != "" {
-		c.Portal.DeviceID2 = c.Portal.GetUID("device_id", c.Portal.Token)
+	// sn/device_id/device_id2/signature are all static functions of the
+	// account's MAC address — verified against a live, authenticated portal
+	// session (see fix.md's device-identity audit): deriving them from just
+	// the MAC reproduces the exact values the portal already had on record.
+	// So a profile only needs a MAC configured; any of these left blank get
+	// auto-derived here rather than requiring the operator to first extract
+	// them from an already-authorized real device. A manually-configured
+	// value is always left untouched (e.g. for a portal whose admin panel
+	// assigned a distinct sn/device_id). Order matters: sn feeds device_id2
+	// and signature. Uses the MAC in the same case as the rest of the
+	// protocol, so uppercase it first. This must run before validate()
+	// below, since validate() requires these fields to be non-empty.
+	c.Portal.MAC = strings.ToUpper(c.Portal.MAC)
+	if c.Portal.SerialNumber == "" {
+		c.Portal.SerialNumber = deriveSN(c.Portal.MAC)
+	}
+	if c.Portal.DeviceID == "" {
+		c.Portal.DeviceID = deriveDeviceID(c.Portal.MAC)
+	}
+	if c.Portal.DeviceID2 == "" {
+		c.Portal.DeviceID2 = deriveDeviceID2(c.Portal.SerialNumber)
+	}
+	if c.Portal.Signature == "" {
+		c.Portal.Signature = deriveSignature(c.Portal.SerialNumber, c.Portal.MAC)
 	}
 
 	// cdn_mac is opt-in and never auto-filled: an empty value makes cdnMAC()
