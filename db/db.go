@@ -40,6 +40,13 @@ type PortalConfig struct {
 	// device_id2/signature are derived from (see stalker.Portal.GetUID).
 	// Auto-generated once if empty, like Token.
 	UIDSecret string `json:"uid_secret,omitempty"`
+
+	// OriginSubnet is the CIDR subnet to scan for origin server IPs that
+	// bypass Cloudflare rate limits on play/live.php (the token-generation
+	// endpoint). When set, create_link requests route directly to a
+	// discovered origin IP instead of through the Cloudflare-proxied URL.
+	// Example: "103.176.90.0/24". Only /24 subnets are supported.
+	OriginSubnet string `json:"origin_subnet,omitempty"`
 }
 
 // ServiceConfig holds bind addresses for HLS and proxy.

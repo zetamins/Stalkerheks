@@ -49,6 +49,17 @@ type Portal struct {
 	// device_id2/signature from. See GetUID in stalker/uid.go.
 	UIDSecret string
 
+	// OriginIPs holds discovered origin server IP addresses that bypass
+	// Cloudflare rate limits on play/live.php (the token-generation
+	// endpoint). Populated at startup by DiscoverOriginIPs when
+	// OriginSubnet is configured. create_link requests use these IPs
+	// directly instead of going through the Cloudflare-proxied URL.
+	OriginIPs []string
+
+	// OriginSubnet is the CIDR subnet to scan for origin server IPs
+	// (e.g. "103.176.90.0/24"). Only /24 subnets are supported.
+	OriginSubnet string
+
 	// IsPlayingFunc reports whether this device is currently relaying a
 	// stream to a viewer. Real STBs send the watchdog's cur_play_type as 0
 	// while idle and a nonzero place code only while actually playing; this
@@ -150,6 +161,7 @@ func LoadProfile(store *db.Store, name string) (*Config, error) {
 			TimeZone:     p.Portal.TimeZone,
 			Token:        p.Portal.Token,
 			UIDSecret:    p.Portal.UIDSecret,
+			OriginSubnet: p.Portal.OriginSubnet,
 		},
 		HLS: Service{
 			Enabled: true,

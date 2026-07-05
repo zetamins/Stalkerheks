@@ -64,6 +64,15 @@ func main() {
 		log.Fatalln("no IPTV channels retrieved from Stalker middleware. quitting...")
 	}
 
+	// If origin subnet is configured, discover origin IPs to bypass
+	// Cloudflare rate limits on play/live.php (token generation).
+	// Discovery runs after channel loading so we can verify origin IPs
+	// against a known stream ID.
+	if c.Portal.OriginSubnet != "" {
+		origins := stalker.DiscoverOriginIPs(c.Portal.OriginSubnet)
+		c.Portal.OriginIPs = origins
+	}
+
 	// Retrieve radio channels (non-fatal)
 	radioChannels, err := c.Portal.RetrieveRadioChannels()
 	if err != nil {
