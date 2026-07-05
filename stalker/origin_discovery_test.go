@@ -34,14 +34,14 @@ func TestNextIP(t *testing.T) {
 }
 
 func TestDiscoverOriginIPs_invalidSubnet(t *testing.T) {
-	origins := DiscoverOriginIPs("not-a-subnet")
+	origins := DiscoverOriginIPs("not-a-subnet", "00:00:00:00:00:00")
 	if origins != nil {
 		t.Errorf("expected nil for invalid subnet, got %v", origins)
 	}
 }
 
 func TestDiscoverOriginIPs_non24Subnet(t *testing.T) {
-	origins := DiscoverOriginIPs("10.0.0.0/16")
+	origins := DiscoverOriginIPs("10.0.0.0/16", "00:00:00:00:00:00")
 	if origins != nil {
 		t.Errorf("expected nil for non-/24 subnet, got %v", origins)
 	}
@@ -49,13 +49,13 @@ func TestDiscoverOriginIPs_non24Subnet(t *testing.T) {
 
 func TestProbeOrigin_miss(t *testing.T) {
 	// 127.0.0.1 should not have anything listening on port 80 (requires root)
-	if probeOrigin("127.0.0.1") {
+	if probeOrigin("127.0.0.1", "00:00:00:00:00:00") {
 		t.Error("probeOrigin(127.0.0.1) = true, want false (nothing listens on :80)")
 	}
 }
 
 func TestDiscoverOriginIPs_emptyOnNoSubnet(t *testing.T) {
-	origins := DiscoverOriginIPs("")
+	origins := DiscoverOriginIPs("", "00:00:00:00:00:00")
 	if origins != nil {
 		t.Errorf("expected nil for empty subnet, got %v", origins)
 	}

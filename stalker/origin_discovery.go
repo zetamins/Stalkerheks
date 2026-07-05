@@ -25,10 +25,15 @@ var originScanner = &http.Client{
 	},
 }
 
-// DiscoverOriginIPs scans a /24 subnet for live origin servers. Returns a
-// list of IP strings (e.g. "103.176.90.24") that responded on port 80.
-// Only /24 subnets are supported.
-func DiscoverOriginIPs(subnet string) []string {
+// DiscoverOriginIPs scans a /24 subnet for live origin servers that respond
+// to play/live.php token requests. Returns a list of IP strings (e.g.
+// "103.176.90.24"). Only /24 subnets are supported.
+//
+// The origin reads the MAC from the URL query string, not the Cookie header.
+// Cloudflare's rate limit reads from the Cookie. By omitting the Cookie
+// entirely when probing and passing mac= in the query string, we avoid
+// Cloudflare's rate-limit tracking bucket.
+func DiscoverOriginIPs(subnet string, mac string) []string {
 	_, ipnet, err := net.ParseCIDR(subnet)
 	if err != nil {
 		log.Printf("Origin discovery: invalid subnet %q: %v", subnet, err)
@@ -56,7 +61,7 @@ func DiscoverOriginIPs(subnet string) []string {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if probeOrigin(ipStr) {
+			if probeOrigin(ipStr, mac) {
 				mu.Lock()
 				origins = append(origins, ipStr)
 				mu.Unlock()
@@ -86,13 +91,19 @@ func nextIP(ip net.IP) net.IP {
 	return n
 }
 
-// probeOrigin checks whether the given IP responds on port 80.
-func probeOrigin(ipStr string) bool {
-	u := "http://" + ipStr + ":80/"
-	req, err := http.NewRequest("HEAD", u, nil)
+// probeOrigin checks whether the given IP responds as a Stalker origin by
+// requesting play/live.php with the MAC in the query string. The origin reads
+// the MAC from the URL query string, not the Cookie header — so we omit the
+// Cookie entirely to stay in a different rate-limit bucket from Cloudflare.
+// Any non-connection-error response (302 with token, 511 for unknown MAC, etc.)
+// confirms the IP is a live origin server.
+func probeOrigin(ipStr string, mac string) bool {
+	u := "http://" + ipStr + ":80/play/live.php?mac=" + mac + "&stream=1&extension=ts"
+	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
 		return false
 	}
+	req.Header.Set("User-Agent", "curl/8.0")
 	resp, err := originScanner.Do(req)
 	if err != nil {
 		return false

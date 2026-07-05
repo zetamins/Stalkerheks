@@ -69,7 +69,7 @@ func main() {
 	// Discovery runs after channel loading so we can verify origin IPs
 	// against a known stream ID.
 	if c.Portal.OriginSubnet != "" {
-		origins := stalker.DiscoverOriginIPs(c.Portal.OriginSubnet)
+		origins := stalker.DiscoverOriginIPs(c.Portal.OriginSubnet, c.Portal.MAC)
 		c.Portal.OriginIPs = origins
 	}
 
