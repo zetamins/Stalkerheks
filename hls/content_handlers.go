@@ -70,14 +70,21 @@ func (inst *Instance) handleContentUnknown(cr *ContentRequest) {
 		resp, err = instanceResponse(cr.ChannelRef.Link, inst)
 		if err != nil {
 			// instanceResponse closes the body and reports a non-2xx
-			// status as an httpStatusError. A 458 ("device not
-			// prioritized") or a transient upstream/CDN 5xx (500, 509,
-			// 520, …) clears on retry — back off and re-resolve the link
-			// with a fresh play_token on the next attempt.
+			// status as an httpStatusError. A 458 (either the auth MAC over
+			// its sharing limit, or play/live.php's per-MAC token-issuance
+			// rate limit — fix1.md §4.2/§6.1, both cleared the same way from
+			// here: a fresh play_token, optionally on a different MAC) or a
+			// transient upstream/CDN 5xx (500, 509, 520, …) clears on retry —
+			// back off and re-resolve the link with a fresh play_token on the
+			// next attempt. 511 is excluded even though it's numerically 5xx:
+			// Cloudflare returns it for a MAC that was never handshaked/isn't
+			// registered at all, which no amount of retrying fixes.
 			var se *httpStatusError
-			if errors.As(err, &se) && (se.code == 458 || se.code >= 500) && attempt < len(backoffs) {
+			if errors.As(err, &se) && se.code != 511 && (se.code == 458 || se.code >= 500) && attempt < len(backoffs) {
 				// A 458 specifically means the auth MAC is over its sharing
-				// limit; switch subsequent re-resolves to the cdn_mac.
+				// limit (or rate limit); switch subsequent re-resolves to the
+				// cdn_mac — fix1.md §6.1 confirms the limit is per-MAC, so an
+				// alternate MAC has its own independent budget.
 				if se.code == 458 {
 					sharingLimited = true
 				}

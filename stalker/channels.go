@@ -106,11 +106,14 @@ func isTransientCreateLinkError(err error) bool {
 // blowing past the header/read deadline under concurrent load from other
 // profiles sharing this process). 4xx (auth, not-found) and JSON decode
 // errors are fatal — retrying those just wastes time on a request that will
-// fail the same way again.
+// fail the same way again. 511 is also fatal despite being numerically a 5xx:
+// Cloudflare returns it specifically for a MAC that was never handshaked or
+// whose prefix isn't registered with the portal (fix1.md §4.2/§5.2) — a
+// permanent misconfiguration, not something that clears on retry.
 func isTransientHTTPError(err error) bool {
 	var se *httpStatusError
 	if errors.As(err, &se) {
-		return se.code >= 500
+		return se.code >= 500 && se.code != 511
 	}
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()

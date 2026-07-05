@@ -79,6 +79,15 @@ func responseFollowWithUA(link, userAgent, mac, model, hash, serial string, dept
 		req.Header.Set("Model", model)
 		req.Header.Set("X-Hash", hash)
 		req.Header.Set("X-SerialNumber", serial)
+		// The CDN authenticates stream requests against this cookie alone —
+		// no session ID, no IP binding (fix1.md §4.4/§4.5): without it, a
+		// request carrying an otherwise-valid CDN URL just hangs until the
+		// connection times out rather than failing fast. This is additive to
+		// the Mac/Model/X-Hash/X-SerialNumber headers above (a separate,
+		// independently-verified real-STB mechanism for media requests) —
+		// real firmware sends both, and different CDN deployments may check
+		// either.
+		req.Header.Set("Cookie", "mac="+url.QueryEscape(mac))
 	}
 
 	resp, err := httpClient.Do(req)

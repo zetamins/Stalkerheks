@@ -6,10 +6,21 @@ import (
 	"log"
 	"os"
 	"sort"
+	"time"
 
 	"github.com/erkexzcx/stalkerhek/db"
 	"github.com/erkexzcx/stalkerhek/stalker"
 )
+
+// probePacingDelay is the pause between successive channels' create_link
+// calls. The underlying stream gateway rate-limits token issuance per-MAC to
+// ~1-2 tokens before a multi-minute cooldown (fix1.md §4.2/§5.5) — looping
+// over channels back-to-back with no delay reliably trips it, turning every
+// channel after the first couple into a spurious LINK_ERROR. This delay is
+// a best-effort mitigation, not a guarantee: it keeps a small probe run
+// comfortably under the observed rate, but it can't out-pace the limit
+// indefinitely for a large --count.
+const probePacingDelay = 2 * time.Second
 
 func main() {
 	profileName := flag.String("profile", "atk97-online", "profile name to test")
@@ -48,6 +59,9 @@ func main() {
 	}
 
 	for i := 0; i < n; i++ {
+		if i > 0 {
+			time.Sleep(probePacingDelay)
+		}
 		ch := channels[names[i]]
 		link, err := ch.NewLink(true)
 		if err != nil {
