@@ -25,7 +25,8 @@ import (
 // ports without sharing device identity or channel state.
 type Instance struct {
 	config      *stalker.Config
-	destination string
+	destination string       // scheme + host from portal URL (e.g. "http://tres.4vps.info:80")
+	portalPath  string       // path from portal URL (e.g. "/c/server/load.php"), empty if portal is at root
 	randomHex   string
 
 	channelsMu      sync.RWMutex
@@ -50,9 +51,14 @@ func NewInstance(c *stalker.Config) *Instance {
 	if err != nil {
 		log.Fatalln(err)
 	}
+	path := link.Path
+	if path == "" {
+		path = "/"
+	}
 	return &Instance{
 		config:               c,
 		destination:          link.Scheme + "://" + link.Host,
+		portalPath:           path,
 		randomHex:            generateRandomHex(32),
 		channels:             make(map[string]*stalker.Channel),
 		channelsByTitle:      make(map[string]*stalker.Channel),
@@ -275,7 +281,7 @@ func (inst *Instance) requestHandler(w http.ResponseWriter, r *http.Request) {
 	// ################################################
 	// Proxy modified request to real portal
 
-	finalLink := inst.destination + r.URL.Path
+	finalLink := inst.destination + inst.portalPath
 	if len(r.URL.RawQuery) != 0 {
 		finalLink += "?" + query.Encode()
 	}
