@@ -61,6 +61,15 @@ func (c *Channel) tryBypass() (string, error) {
 		}
 	}
 
+	// Method 2b: play/live.php on origin without mac param.
+	// Some origins serve stream data keyed only on stream ID, letting us
+	// bypass per-MAC rate limits entirely by omitting the mac parameter.
+	if streamID != "" {
+		if link, err := c.tryPlayLiveNoMac(base, streamID); err == nil {
+			return link, nil
+		}
+	}
+
 	// Method 3: Cookie-less create_link on origin. Same request but
 	// without the Cookie header — Cloudflare can't key its rate limit
 	// on an empty cookie bucket.
@@ -90,10 +99,14 @@ func (c *Channel) tryDirectHLS(base string) (string, error) {
 			}
 
 			if resp.StatusCode == 200 {
+				if isStreamResponse(resp) {
+					resp.Body.Close()
+					return u, nil
+				}
 				body, _ := ioutil.ReadAll(resp.Body)
 				resp.Body.Close()
 
-				if len(body) > 0 && (strings.HasPrefix(string(body), "#EXTM3U") || len(body) > 100) {
+				if strings.HasPrefix(string(body), "#EXTM3U") {
 					return u, nil
 				}
 				continue
@@ -128,6 +141,31 @@ func (c *Channel) tryPlayLiveOrigin(base string, streamID string) (string, error
 		}
 	}
 	return "", fmt.Errorf("play/live.php returned %d", resp.StatusCode)
+}
+
+// tryPlayLiveNoMac calls play/live.php on the origin without the mac
+// parameter. Some origins don't key stream access on the MAC and will
+// serve MPEG-TS data based solely on the stream ID, bypassing per-MAC
+// rate limits entirely.
+func (c *Channel) tryPlayLiveNoMac(base string, streamID string) (string, error) {
+	u := fmt.Sprintf("%s/play/live.php?stream=%s&extension=ts",
+		strings.TrimRight(base, "/"),
+		url.PathEscape(streamID))
+
+	req, _ := http.NewRequest("GET", u, nil)
+	resp, err := bypassClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("play/live.php (no mac) returned %d", resp.StatusCode)
+	}
+	if !isStreamResponse(resp) {
+		return "", fmt.Errorf("play/live.php (no mac) returned non-stream content: %s", resp.Header.Get("Content-Type"))
+	}
+	return u, nil
 }
 
 // tryCreateLinkNoCookie sends create_link to the origin without the Cookie
@@ -289,6 +327,21 @@ func parseCreateLinkResponse(link string, body []byte) (string, error) {
 	}
 	strs := strings.Split(tmp.Js.Cmd, " ")
 	return strs[len(strs)-1], nil
+}
+
+// isStreamResponse reports whether the response contains actual streaming
+// content (MPEG-TS video or HLS playlist). Checks Content-Type for video/
+// or application/vnd.apple.mpegurl, and falls back to checking the first
+// byte for the MPEG-TS sync byte (0x47).
+func isStreamResponse(resp *http.Response) bool {
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.HasPrefix(ct, "video/") || ct == "application/vnd.apple.mpegurl" || ct == "application/x-mpegurl" {
+		return true
+	}
+	if ct == "application/octet-stream" {
+		return true
+	}
+	return false
 }
 
 // resolveURL resolves a relative Location header against a request URL.
