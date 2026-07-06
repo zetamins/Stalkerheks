@@ -315,6 +315,57 @@ func (p *Portal) getGenres() (map[string]string, error) {
 	return genres, nil
 }
 
+// RetrieveOrderedChannels retrieves subscribed TV channels via get_ordered_list,
+// which returns channels ordered by the user's subscription with exact stream IDs.
+// Falls back to get_all_channels semantics — callers should fall back to
+// RetrieveChannels if this returns fewer channels than expected.
+func (p *Portal) RetrieveOrderedChannels() (map[string]*Channel, error) {
+	type tmpStruct struct {
+		Js struct {
+			Data []struct {
+				ID      string `json:"id"`
+				Name    string `json:"name"`
+				Cmd     string `json:"cmd"`
+				Logo    string `json:"logo"`
+				GenreID string `json:"tv_genre_id"`
+			} `json:"data"`
+		} `json:"js"`
+	}
+	var tmp tmpStruct
+
+	content, err := p.httpRequest(p.Location + "?type=itv&action=get_ordered_list&JsHttpRequest=1-xml")
+	if err != nil {
+		return nil, err
+	}
+
+	if err := json.Unmarshal(content, &tmp); err != nil {
+		return nil, err
+	}
+
+	genres, err := p.getGenres()
+	if err != nil {
+		return nil, err
+	}
+
+	channels := make(map[string]*Channel, len(tmp.Js.Data))
+	for _, v := range tmp.Js.Data {
+		title := v.Name
+		if _, exists := channels[title]; exists {
+			title = v.Name + " (" + v.ID + ")"
+		}
+		channels[title] = &Channel{
+			Title:     title,
+			CMD:       v.Cmd,
+			LogoLink:  v.Logo,
+			Portal:    p,
+			GenreID:   v.GenreID,
+			Genres:    &genres,
+		}
+	}
+
+	return channels, nil
+}
+
 // ####################################################
 // Radio Channels
 

@@ -54,11 +54,21 @@ func main() {
 		}
 	}
 
-	// Retrieve channels list
+	// Retrieve TV channels — try get_ordered_list first (subscribed channels
+	// with exact stream IDs), fall back to get_all_channels if it returns
+	// nothing (unsubscribed MAC or portal doesn't support ordered list for itv).
 	log.Println("Retrieving channels list from Stalker middleware...")
-	channels, err := c.Portal.RetrieveChannels()
-	if err != nil {
-		log.Fatalln(err)
+	channels, err := c.Portal.RetrieveOrderedChannels()
+	if err != nil || len(channels) == 0 {
+		if err != nil {
+			log.Println("get_ordered_list failed, falling back to get_all_channels:", err)
+		} else {
+			log.Println("get_ordered_list returned 0 channels, falling back to get_all_channels")
+		}
+		channels, err = c.Portal.RetrieveChannels()
+		if err != nil {
+			log.Fatalln(err)
+		}
 	}
 	if len(channels) == 0 {
 		log.Fatalln("no IPTV channels retrieved from Stalker middleware. quitting...")

@@ -46,29 +46,33 @@ func (c *Channel) tryBypass() (string, error) {
 	// can try Cloudflare-layer bypasses that don't need origin IPs.
 	playBase := playBaseFromCMD(c.CMD)
 
-	// Method 1: CDN redirect via _=cache_bust on Cloudflare URL.
+	// Method 1: create_link with stream={id} instead of cmd=... on the
+	// Cloudflare URL. The stream= parameter returns a real, signed play_token
+	// embedded in the js.cmd URL even when cmd= fails with 458 (different
+	// rate-limit path server-side). Returns the full ffmpeg URL with a valid
+	// play_token — the portal's own token generator.
+	if streamID != "" {
+		if link, err := c.tryCreateLinkStream(streamID); err == nil {
+			return link, nil
+		}
+	}
+
+	// Method 2: CDN redirect via _=cache_bust on Cloudflare URL.
 	// Forces a Cloudflare cache miss → 302 → direct CDN stream URL.
-	// No valid play_token needed; Cloudflare treats a cache miss as a
-	// pass-through to the CDN edge which serves the stream directly.
 	if playBase != "" {
 		if link, err := c.tryCDNRedirect(playBase, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 2: Fake play_token on Cloudflare URL.
-	// Any string (even "FAKETOKEN123") as play_token triggers a 302
-	// redirect to the CDN stream. No create_link API dependency.
+	// Method 3: Fake play_token on Cloudflare URL.
 	if playBase != "" && streamID != "" {
 		if link, err := c.tryFakePlayToken(playBase, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 3: Any-mac-cookie on Cloudflare URL.
-	// Cloudflare only checks that the mac Cookie exists, not that the MAC
-	// is valid. Even mac=DE:AD:BE:EF:00:01 works, shifting into a different
-	// per-MAC rate-limit bucket while keeping the real MAC in the URL.
+	// Method 4: Any-mac-cookie on Cloudflare URL.
 	if playBase != "" && streamID != "" {
 		if link, err := c.tryAnyMacCookie(playBase, streamID); err == nil {
 			return link, nil
@@ -80,31 +84,31 @@ func (c *Channel) tryBypass() (string, error) {
 		return "", fmt.Errorf("no origin base URL available")
 	}
 
-	// Method 4: HLS Direct Endpoint — no auth needed, no rate limit.
+	// Method 5: HLS Direct Endpoint — no auth needed, no rate limit.
 	if link, err := c.tryDirectHLS(base); err == nil {
 		return link, nil
 	}
 
-	// Method 5: play/live.php on origin with mac in query, no Cookie.
+	// Method 6: play/live.php on origin with mac in query, no Cookie.
 	if streamID != "" {
 		if link, err := c.tryPlayLiveOrigin(base, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 6: play/live.php on origin without mac param.
+	// Method 7: play/live.php on origin without mac param.
 	if streamID != "" {
 		if link, err := c.tryPlayLiveNoMac(base, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 7: Cookie-less create_link on origin.
+	// Method 8: Cookie-less create_link on origin.
 	if link, err := c.tryCreateLinkNoCookie(); err == nil {
 		return link, nil
 	}
 
-	// Method 8: POST / alternate User-Agent on origin.
+	// Method 9: POST / alternate User-Agent on origin.
 	if link, err := c.tryCreateLinkPOST(); err == nil {
 		return link, nil
 	}
@@ -349,6 +353,19 @@ func (c *Channel) tryCreateLinkPOST() (string, error) {
 	}
 
 	return "", fmt.Errorf("POST create_link failed")
+}
+
+// tryCreateLinkStream calls create_link with stream={id} (instead of cmd=...)
+// on the Cloudflare URL. The stream= parameter returns a real, signed play_token
+// embedded in the js.cmd ffmpeg URL — the portal's own token generator — and
+// works on a different rate-limit path than the standard cmd= create_link.
+func (c *Channel) tryCreateLinkStream(streamID string) (string, error) {
+	link := c.Portal.Location + "?action=create_link&type=itv&stream=" + url.PathEscape(streamID) + "&series=&forced_storage=&disable_ad=0&download=0&JsHttpRequest=1-xml"
+	content, err := c.Portal.httpRequest(link)
+	if err != nil {
+		return "", err
+	}
+	return parseCreateLinkResponse(link, content)
 }
 
 // --- Helpers --------------------------------------------------------------
