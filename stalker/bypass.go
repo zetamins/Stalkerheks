@@ -354,7 +354,8 @@ func (c *Channel) tryCreateLinkPOST() (string, error) {
 // --- Helpers --------------------------------------------------------------
 
 // originBase returns the scheme + host portion of the portal URL, preferring
-// a discovered origin IP when available.
+// a discovered origin IP when available. Falls back to trying known
+// Cloudflare direct IPs if DNS resolution fails.
 func (p *Portal) originBase() string {
 	if len(p.OriginIPs) > 0 {
 		return "http://" + p.OriginIPs[0]
@@ -368,6 +369,10 @@ func (p *Portal) originBase() string {
 	}
 	if parsed.Scheme == "" || parsed.Host == "" {
 		return ""
+	}
+	// Try Cloudflare IP fallback when no origin IPs discovered
+	if cf := p.tryCloudflareIP(); cf != "" {
+		return cf
 	}
 	return parsed.Scheme + "://" + parsed.Host
 }
