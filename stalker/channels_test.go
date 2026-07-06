@@ -173,6 +173,65 @@ func TestRetrieveRadioChannels(t *testing.T) {
 	}
 }
 
+// TestNewLinkBypasses458ViaOrigin verifies that when OriginIPs are configured,
+// create_link routes to the origin server instead of the Cloudflare-proxied URL,
+// bypassing Cloudflare's 458 rate limit.
+func TestNewLinkBypasses458ViaOrigin(t *testing.T) {
+	var cloudflareHits int
+	cloudflare := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cloudflareHits++
+		w.WriteHeader(458)
+	}))
+	defer cloudflare.Close()
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"js":{"cmd":"ffmpeg http://cdn.example/live/456","error":""}}`))
+	}))
+	defer origin.Close()
+
+	// Portal points at Cloudflare, but OriginIPs redirect create_link to origin
+	p := &Portal{
+		Location:  cloudflare.URL,
+		OriginIPs: []string{origin.Listener.Addr().String()},
+	}
+	c := &Channel{CMD: "test_channel", Portal: p}
+
+	link, err := c.NewLink(false)
+	if err != nil {
+		t.Fatalf("NewLink should route to origin and succeed, got: %v", err)
+	}
+	if link != "http://cdn.example/live/456" {
+		t.Errorf("unexpected link %q", link)
+	}
+	if cloudflareHits > 0 {
+		t.Errorf("create_link hit Cloudflare %d times (expected 0 — should route to origin)", cloudflareHits)
+	}
+}
+
+// TestNewLinkFallsBackWhenNoOrigins verifies that without OriginIPs,
+// create_link goes through the configured portal URL (Cloudflare) and
+// returns its 458 error rather than a working link.
+func TestNewLinkFallsBackWhenNoOrigins(t *testing.T) {
+	cf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(458)
+	}))
+	defer cf.Close()
+
+	p := &Portal{
+		Location:  cf.URL,
+		OriginIPs: nil, // no origins discovered — fall back to Cloudflare
+	}
+	c := &Channel{CMD: "test_channel", Portal: p}
+
+	_, err := c.NewLink(false)
+	if err == nil {
+		t.Fatal("expected 458 error when no origin IPs configured")
+	}
+	if !strings.Contains(err.Error(), "458") {
+		t.Errorf("expected 458 in error, got: %v", err)
+	}
+}
+
 func TestGetVODCategories(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"js":[

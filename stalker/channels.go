@@ -81,6 +81,16 @@ func (c *Channel) newLink(retry, useCDNMAC bool) (string, error) {
 			return link, nil
 		}
 		lastErr = err
+		if isBypassableError(err) {
+			// Non-transient rate-limit/subscription error — try bypass
+			// methods before giving up.
+			log.Printf("create_link bypassable error, trying bypass methods: %v", err)
+			if bypassLink, bypassErr := c.tryBypass(); bypassErr == nil {
+				return bypassLink, nil
+			}
+			log.Printf("bypass methods also failed for %s: %v", c.Title, lastErr)
+			return "", lastErr
+		}
 		if !retry || !isTransientCreateLinkError(err) || attempt == attempts {
 			break
 		}
@@ -97,6 +107,21 @@ func isTransientCreateLinkError(err error) bool {
 	// Real STB treats "limit" as FATAL (shows notice, does not retry).
 	// Only "temporary_unavailable" is retried on create_link level.
 	return strings.Contains(err.Error(), "temporary_unavailable")
+}
+
+// isBypassableError reports whether err indicates a rate-limit or access
+// denial that the bypass methods (HLS direct, play/live.php, cookie-less)
+// may be able to work around: HTTP 456 (no subscription), 458 (rate limit),
+// 403 (forbidden), or a "limit" application error from create_link.
+func isBypassableError(err error) bool {
+	var se *httpStatusError
+	if errors.As(err, &se) {
+		switch se.code {
+		case 403, 456, 458:
+			return true
+		}
+	}
+	return strings.Contains(err.Error(), "create_link failed: limit")
 }
 
 // isTransientHTTPError reports whether err looks like a passing
