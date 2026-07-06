@@ -154,7 +154,6 @@ func (c *Channel) newLinkOnce(useCDNMAC bool) (string, error) {
 	var tmp tmpStruct
 
 	link := c.Portal.Location + "?action=create_link&type=itv&cmd=" + url.PathEscape(c.CMD) + "&series=&forced_storage=&disable_ad=0&download=0&JsHttpRequest=1-xml"
-	link = c.Portal.originURL(link)
 	content, err := c.Portal.httpRequest(link)
 	if err != nil {
 		return "", err
@@ -391,7 +390,6 @@ func (c *RadioChannel) newLinkOnce() (string, error) {
 	var tmp tmpStruct
 
 	link := c.Portal.Location + "?action=create_link&type=radio&cmd=" + url.PathEscape(c.CMD) + "&series=&forced_storage=&disable_ad=0&download=0&JsHttpRequest=1-xml"
-	link = c.Portal.originURL(link)
 	content, err := c.Portal.httpRequest(link)
 	if err != nil {
 		return "", err
@@ -526,7 +524,6 @@ func (p *Portal) NewVODLink(cmd, series, forcedStorage string) (string, error) {
 		link += "&forced_storage="
 	}
 	link += "&disable_ad=0&download=0&JsHttpRequest=1-xml"
-	link = p.originURL(link)
 
 	content, err := p.httpRequest(link)
 	if err != nil {
@@ -599,7 +596,6 @@ func (p *Portal) NewKaraokeLink(cmd string) (string, error) {
 	var tmp tmpStruct
 
 	link := p.Location + "?action=create_link&type=karaoke&cmd=" + url.PathEscape(cmd) + "&series=&forced_storage=&disable_ad=0&download=0&JsHttpRequest=1-xml"
-	link = p.originURL(link)
 	content, err := p.httpRequest(link)
 	if err != nil {
 		return "", err
