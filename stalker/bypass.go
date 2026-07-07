@@ -37,6 +37,15 @@ var hlsDirectPatterns = []string{
 	"/ch/%s.ts",
 }
 
+// extractPlayToken extracts the play_token query parameter from a URL.
+func extractPlayToken(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return parsed.Query().Get("play_token")
+}
+
 // tryBypass attempts all bypass methods in priority order and returns the
 // first working stream URL. Called when create_link fails with a bypassable
 // error (456 no subscription, 458 rate-limit, 403 forbidden).
@@ -48,18 +57,36 @@ func (c *Channel) tryBypass() (string, error) {
 	// can try Cloudflare-layer bypasses that don't need origin IPs.
 	playBase := playBaseFromCMD(c.CMD)
 
-	// Method 1: create_link with stream={id} instead of cmd=... on the
-	// Cloudflare URL. The stream= parameter returns a real, signed play_token
-	// embedded in the js.cmd URL even when cmd= fails with 458 (different
-	// rate-limit path server-side). Returns the full ffmpeg URL with a valid
-	// play_token — the portal's own token generator.
+	// --- Phase 1: Get a real play_token via create_link with stream={id}
+	// The 10-char base64 play_token is a server-side session key — the only
+	// way to get the triple-base64 CDN URL is to call play/live.php with it.
+	// We also keep the create_link ffmpeg URL as fallback.
+	var playToken string
+	var createLinkURL string
 	if streamID != "" {
 		if link, err := c.tryCreateLinkStream(streamID); err == nil {
+			createLinkURL = link
+			playToken = extractPlayToken(link)
+		}
+	}
+
+	// --- Phase 2: Raw socket play/live.php with real play_token + keep-alive
+	// This gives the triple-base64 CDN URL (best quality, longest validity).
+	if playToken != "" && playBase != "" {
+		if link, err := c.tryRawSocketPlayLive(playBase, streamID, playToken); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 2: CDN redirect via _=cache_bust on Cloudflare URL.
+	// --- Phase 3: Fall back to create_link's ffmpeg URL (also works, but
+	// may use a different CDN path without the triple-base64 routing).
+	if createLinkURL != "" {
+		return createLinkURL, nil
+	}
+
+	// --- Phase 4: Cloudflare-layer bypasses (no play_token needed) ---
+
+	// Method 1: CDN redirect via _=cache_bust on Cloudflare URL.
 	// Forces a Cloudflare cache miss → 302 → direct CDN stream URL.
 	if playBase != "" {
 		if link, err := c.tryCDNRedirect(playBase, streamID); err == nil {
@@ -67,62 +94,50 @@ func (c *Channel) tryBypass() (string, error) {
 		}
 	}
 
-	// Method 3: Fake play_token on Cloudflare URL.
+	// Method 2: Fake play_token on Cloudflare URL.
 	if playBase != "" && streamID != "" {
 		if link, err := c.tryFakePlayToken(playBase, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 4: Any-mac-cookie on Cloudflare URL.
+	// Method 3: Any-mac-cookie on Cloudflare URL.
 	if playBase != "" && streamID != "" {
 		if link, err := c.tryAnyMacCookie(playBase, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 5: Raw socket play/live.php on Cloudflare URL with keep-alive.
-	// Uses raw TCP + HTTP/1.1 with Connection: keep-alive — the CDN edge
-	// validates the TCP session continuity. Standard http.Client with
-	// DisableKeepAlives (or even keep-alive enabled) doesn't work here;
-	// the redirect only succeeds when the connection is kept alive and
-	// the HTTP request is crafted at the wire level.
-	if playBase != "" && streamID != "" {
-		if link, err := c.tryRawSocketPlayLive(playBase, streamID); err == nil {
-			return link, nil
-		}
-	}
-
-	// Origin-based methods below require discovered origin IPs.
+	// --- Phase 5: Origin-based methods (require discovered origin IPs) ---
 	if base == "" {
 		return "", fmt.Errorf("no origin base URL available")
 	}
 
-	// Method 6: HLS Direct Endpoint — no auth needed, no rate limit.
+	// Method 4: HLS Direct Endpoint — no auth needed, no rate limit.
 	if link, err := c.tryDirectHLS(base); err == nil {
 		return link, nil
 	}
 
-	// Method 7: play/live.php on origin with mac in query, no Cookie.
+	// Method 5: play/live.php on origin with mac in query, no Cookie.
 	if streamID != "" {
 		if link, err := c.tryPlayLiveOrigin(base, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 8: play/live.php on origin without mac param.
+	// Method 6: play/live.php on origin without mac param.
 	if streamID != "" {
 		if link, err := c.tryPlayLiveNoMac(base, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 9: Cookie-less create_link on origin.
+	// Method 7: Cookie-less create_link on origin.
 	if link, err := c.tryCreateLinkNoCookie(); err == nil {
 		return link, nil
 	}
 
-	// Method 10: POST / alternate User-Agent on origin.
+	// Method 8: POST / alternate User-Agent on origin.
 	if link, err := c.tryCreateLinkPOST(); err == nil {
 		return link, nil
 	}
@@ -385,9 +400,11 @@ func (c *Channel) tryCreateLinkStream(streamID string) (string, error) {
 // tryRawSocketPlayLive sends play/live.php over a raw TCP socket with
 // Connection: keep-alive. The CDN edge validates TCP session continuity;
 // standard http.Client keep-alive doesn't trigger the same behavior.
-// Returns the 302 redirect Location (CDN stream URL).
-func (c *Channel) tryRawSocketPlayLive(playBase string, streamID string) (string, error) {
-	u := playBase + "?mac=" + url.QueryEscape(c.Portal.MAC) + "&stream=" + url.PathEscape(streamID) + "&extension=ts"
+// Returns the 302 redirect Location (CDN stream URL with triple-base64 path).
+// The play_token is a 10-char base64 server-side session key obtained from
+// create_link with stream={id} — without it play/live.php returns a 456.
+func (c *Channel) tryRawSocketPlayLive(playBase string, streamID string, playToken string) (string, error) {
+	u := playBase + "?mac=" + url.QueryEscape(c.Portal.MAC) + "&stream=" + url.PathEscape(streamID) + "&extension=ts&play_token=" + url.PathEscape(playToken)
 	parsed, err := url.Parse(u)
 	if err != nil {
 		return "", err
