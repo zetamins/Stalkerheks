@@ -1,9 +1,11 @@
 package stalker
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -79,36 +81,48 @@ func (c *Channel) tryBypass() (string, error) {
 		}
 	}
 
+	// Method 5: Raw socket play/live.php on Cloudflare URL with keep-alive.
+	// Uses raw TCP + HTTP/1.1 with Connection: keep-alive — the CDN edge
+	// validates the TCP session continuity. Standard http.Client with
+	// DisableKeepAlives (or even keep-alive enabled) doesn't work here;
+	// the redirect only succeeds when the connection is kept alive and
+	// the HTTP request is crafted at the wire level.
+	if playBase != "" && streamID != "" {
+		if link, err := c.tryRawSocketPlayLive(playBase, streamID); err == nil {
+			return link, nil
+		}
+	}
+
 	// Origin-based methods below require discovered origin IPs.
 	if base == "" {
 		return "", fmt.Errorf("no origin base URL available")
 	}
 
-	// Method 5: HLS Direct Endpoint — no auth needed, no rate limit.
+	// Method 6: HLS Direct Endpoint — no auth needed, no rate limit.
 	if link, err := c.tryDirectHLS(base); err == nil {
 		return link, nil
 	}
 
-	// Method 6: play/live.php on origin with mac in query, no Cookie.
+	// Method 7: play/live.php on origin with mac in query, no Cookie.
 	if streamID != "" {
 		if link, err := c.tryPlayLiveOrigin(base, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 7: play/live.php on origin without mac param.
+	// Method 8: play/live.php on origin without mac param.
 	if streamID != "" {
 		if link, err := c.tryPlayLiveNoMac(base, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 8: Cookie-less create_link on origin.
+	// Method 9: Cookie-less create_link on origin.
 	if link, err := c.tryCreateLinkNoCookie(); err == nil {
 		return link, nil
 	}
 
-	// Method 9: POST / alternate User-Agent on origin.
+	// Method 10: POST / alternate User-Agent on origin.
 	if link, err := c.tryCreateLinkPOST(); err == nil {
 		return link, nil
 	}
@@ -366,6 +380,57 @@ func (c *Channel) tryCreateLinkStream(streamID string) (string, error) {
 		return "", err
 	}
 	return parseCreateLinkResponse(link, content)
+}
+
+// tryRawSocketPlayLive sends play/live.php over a raw TCP socket with
+// Connection: keep-alive. The CDN edge validates TCP session continuity;
+// standard http.Client keep-alive doesn't trigger the same behavior.
+// Returns the 302 redirect Location (CDN stream URL).
+func (c *Channel) tryRawSocketPlayLive(playBase string, streamID string) (string, error) {
+	u := playBase + "?mac=" + url.QueryEscape(c.Portal.MAC) + "&stream=" + url.PathEscape(streamID) + "&extension=ts"
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return "", err
+	}
+
+	host := parsed.Host
+	if !strings.Contains(host, ":") {
+		host += ":80"
+	}
+
+	conn, err := net.DialTimeout("tcp", host, 10*time.Second)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	path := parsed.Path
+	if parsed.RawQuery != "" {
+		path += "?" + parsed.RawQuery
+	}
+
+	req := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nConnection: keep-alive\r\nUser-Agent: %s\r\nCookie: mac=%s; stb_lang=en; timezone=%s\r\n\r\n",
+		path, parsed.Host, c.Portal.UserAgent(), url.QueryEscape(c.Portal.MAC), url.QueryEscape(c.Portal.TimeZone))
+
+	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if _, err := conn.Write([]byte(req)); err != nil {
+		return "", err
+	}
+
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode == 302 {
+		loc := resp.Header.Get("Location")
+		if loc != "" {
+			return resolveURL(u, loc), nil
+		}
+	}
+	return "", fmt.Errorf("raw socket play/live.php returned %d", resp.StatusCode)
 }
 
 // --- Helpers --------------------------------------------------------------
