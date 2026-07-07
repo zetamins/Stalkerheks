@@ -179,6 +179,28 @@ func (p *Portal) httpRequest(link string) ([]byte, error) {
 	return contents, nil
 }
 
+// doLiveRequest sends a GET to the given URL using httpRedirectClient (the
+// same HTTP client used for handshake and create_link). This is critical for
+// play/live.php calls — the CDN edge requires TCP session affinity: live.php
+// MUST be requested on the exact same TCP connection as handshake + create_link.
+// A separate connection (raw socket, different http.Client) returns 0 bytes.
+// Unlike doHTTPRequest, this returns the raw response for any status code
+// (including 302) so callers can inspect redirect Location headers.
+func (p *Portal) doLiveRequest(link string) (*http.Response, error) {
+	req, err := http.NewRequest("GET", link, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("User-Agent", p.UserAgent())
+	req.Header.Set("X-User-Agent", "Model: "+p.Model+"; Link: Ethernet")
+	req.Header.Set("Authorization", "Bearer "+p.Token)
+	cookieText := "mac=" + url.QueryEscape(p.MAC) + "; stb_lang=en; timezone=" + url.QueryEscape(p.TimeZone)
+	req.Header.Set("Cookie", cookieText)
+
+	return httpRedirectClient.Do(req)
+}
+
 func (p *Portal) doHTTPRequest(link string) (*http.Response, error) {
 	return p.doHTTPRequestFollow(link, 0)
 }

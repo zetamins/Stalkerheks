@@ -1,11 +1,9 @@
 package stalker
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -70,10 +68,11 @@ func (c *Channel) tryBypass() (string, error) {
 		}
 	}
 
-	// --- Phase 2: Raw socket play/live.php with real play_token + keep-alive
-	// This gives the triple-base64 CDN URL (best quality, longest validity).
+	// --- Phase 2: play/live.php on the same TCP session as handshake/create_link
+	// The CDN edge requires TCP session affinity — live.php must be on the
+	// exact same connection. This gives the triple-base64 CDN URL.
 	if playToken != "" && playBase != "" {
-		if link, err := c.tryRawSocketPlayLive(playBase, streamID, playToken); err == nil {
+		if link, err := c.trySessionLive(playBase, streamID, playToken); err == nil {
 			return link, nil
 		}
 	}
@@ -397,45 +396,14 @@ func (c *Channel) tryCreateLinkStream(streamID string) (string, error) {
 	return parseCreateLinkResponse(link, content)
 }
 
-// tryRawSocketPlayLive sends play/live.php over a raw TCP socket with
-// Connection: keep-alive. The CDN edge validates TCP session continuity;
-// standard http.Client keep-alive doesn't trigger the same behavior.
+// trySessionLive calls play/live.php through the portal's httpRedirectClient
+// (same TCP connection as handshake and create_link). The CDN edge requires
+// TCP session affinity — live.php MUST be on the exact same connection.
 // Returns the 302 redirect Location (CDN stream URL with triple-base64 path).
-// The play_token is a 10-char base64 server-side session key obtained from
-// create_link with stream={id} — without it play/live.php returns a 456.
-func (c *Channel) tryRawSocketPlayLive(playBase string, streamID string, playToken string) (string, error) {
+// The play_token is a 10-char server-side session key from create_link.
+func (c *Channel) trySessionLive(playBase string, streamID string, playToken string) (string, error) {
 	u := playBase + "?mac=" + url.QueryEscape(c.Portal.MAC) + "&stream=" + url.PathEscape(streamID) + "&extension=ts&play_token=" + url.PathEscape(playToken)
-	parsed, err := url.Parse(u)
-	if err != nil {
-		return "", err
-	}
-
-	host := parsed.Host
-	if !strings.Contains(host, ":") {
-		host += ":80"
-	}
-
-	conn, err := net.DialTimeout("tcp", host, 10*time.Second)
-	if err != nil {
-		return "", err
-	}
-	defer conn.Close()
-
-	path := parsed.Path
-	if parsed.RawQuery != "" {
-		path += "?" + parsed.RawQuery
-	}
-
-	req := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nConnection: keep-alive\r\nUser-Agent: %s\r\nCookie: mac=%s; stb_lang=en; timezone=%s\r\n\r\n",
-		path, parsed.Host, c.Portal.UserAgent(), url.QueryEscape(c.Portal.MAC), url.QueryEscape(c.Portal.TimeZone))
-
-	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	if _, err := conn.Write([]byte(req)); err != nil {
-		return "", err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	resp, err := c.Portal.doLiveRequest(u)
 	if err != nil {
 		return "", err
 	}
@@ -447,7 +415,7 @@ func (c *Channel) tryRawSocketPlayLive(playBase string, streamID string, playTok
 			return resolveURL(u, loc), nil
 		}
 	}
-	return "", fmt.Errorf("raw socket play/live.php returned %d", resp.StatusCode)
+	return "", fmt.Errorf("session live.php returned %d", resp.StatusCode)
 }
 
 // --- Helpers --------------------------------------------------------------
