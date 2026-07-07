@@ -39,19 +39,22 @@ func getRequest(link string, originalRequest *http.Request, config *stalker.Conf
 
 	destURL, _ := url.Parse(link)
 
+	// Always set minimum STB identity headers regardless of what the STB
+	// sends. Cloudflare requires these to recognise the request as a
+	// legitimate STB; omitting them triggers a challenge/interstitial page.
+	req.Header.Set("Authorization", "Bearer "+config.Portal.Token)
+	req.Header.Set("Cookie", "mac="+url.QueryEscape(config.Portal.MAC)+"; stb_lang=en; timezone="+url.QueryEscape(config.Portal.TimeZone))
+	req.Header.Set("User-Agent", config.Portal.UserAgent())
+	req.Header.Set("X-User-Agent", "Model: "+config.Portal.Model+"; Link: Ethernet")
+	if config.Portal.SerialNumber != "" {
+		req.Header.Set("Sn", config.Portal.SerialNumber)
+	}
+
 	for k, v := range originalRequest.Header {
 		switch k {
-		case "Authorization":
-			req.Header.Set("Authorization", "Bearer "+config.Portal.Token)
-		case "Cookie":
-			cookieText := "mac=" + url.QueryEscape(config.Portal.MAC) + "; stb_lang=en; timezone=" + url.QueryEscape(config.Portal.TimeZone)
-			req.Header.Set("Cookie", cookieText)
-		case "User-Agent":
-			req.Header.Set("User-Agent", config.Portal.UserAgent())
-		case "X-User-Agent":
-			req.Header.Set("X-User-Agent", "Model: "+config.Portal.Model+"; Link: Ethernet")
-		case "Sn":
-			req.Header.Set("Sn", config.Portal.SerialNumber)
+		case "Authorization", "Cookie", "User-Agent", "X-User-Agent", "Sn":
+			// Already set above — skip override from STB to prevent
+			// untrusted STB headers from reaching the real portal.
 		case "Host":
 			if destURL != nil {
 				req.Header.Set("Host", destURL.Host)
@@ -63,7 +66,7 @@ func getRequest(link string, originalRequest *http.Request, config *stalker.Conf
 		case "Accept-Encoding":
 			continue
 		default:
-			if strings.HasPrefix(k, "X-") && k != "X-User-Agent" {
+			if strings.HasPrefix(k, "X-") {
 				continue
 			}
 			req.Header[k] = v
