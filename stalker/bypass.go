@@ -384,7 +384,7 @@ func (c *Channel) tryCreateLinkStream(streamID string) (string, error) {
 // directly with live.php without any create_link call.
 func (c *Channel) trySessionLive(playBase string, streamID string) (string, error) {
 	u := playBase + "?mac=" + url.QueryEscape(c.Portal.MAC) + "&stream=" + url.PathEscape(streamID) + "&extension=ts&play_token=" + url.QueryEscape(c.Portal.Token)
-	resp, err := c.Portal.doLiveRequest(u)
+	resp, err := c.Portal.DoLiveRequest(u)
 	if err != nil {
 		return "", err
 	}
