@@ -35,108 +35,88 @@ var hlsDirectPatterns = []string{
 	"/ch/%s.ts",
 }
 
-// extractPlayToken extracts the play_token query parameter from a URL.
-func extractPlayToken(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return ""
-	}
-	return parsed.Query().Get("play_token")
-}
-
 // tryBypass attempts all bypass methods in priority order and returns the
 // first working stream URL. Called when create_link fails with a bypassable
 // error (456 no subscription, 458 rate-limit, 403 forbidden).
+//
+// The handshake token (32-char hex in Portal.Token) serves as the play_token
+// for live.php — no separate create_link needed. The CDN edge verifies the
+// token matches the MAC and channel, then returns a 302 to the CDN stream URL.
 func (c *Channel) tryBypass() (string, error) {
 	base := c.Portal.originBase()
 	streamID := extractStreamID(c.CMD)
-
-	// Extract the Cloudfront/portal play/live.php base from the CMD so we
-	// can try Cloudflare-layer bypasses that don't need origin IPs.
 	playBase := playBaseFromCMD(c.CMD)
 
-	// --- Phase 1: Get a real play_token via create_link with stream={id}
-	// The 10-char base64 play_token is a server-side session key — the only
-	// way to get the triple-base64 CDN URL is to call play/live.php with it.
-	// We also keep the create_link ffmpeg URL as fallback.
-	var playToken string
-	var createLinkURL string
-	if streamID != "" {
-		if link, err := c.tryCreateLinkStream(streamID); err == nil {
-			createLinkURL = link
-			playToken = extractPlayToken(link)
-		}
-	}
-
-	// --- Phase 2: play/live.php on the same TCP session as handshake/create_link
-	// The CDN edge requires TCP session affinity — live.php must be on the
-	// exact same connection. This gives the triple-base64 CDN URL.
-	if playToken != "" && playBase != "" {
-		if link, err := c.trySessionLive(playBase, streamID, playToken); err == nil {
+	// --- Phase 1: Handshake token → live.php → CDN redirect (best path) ---
+	// The handshake token works directly as play_token. live.php must be
+	// called on the same TCP session (httpRedirectClient) to pass the CDN
+	// edge's session affinity check.
+	if c.Portal.Token != "" && playBase != "" && streamID != "" {
+		if link, err := c.trySessionLive(playBase, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// --- Phase 3: Fall back to create_link's ffmpeg URL (also works, but
-	// may use a different CDN path without the triple-base64 routing).
-	if createLinkURL != "" {
-		return createLinkURL, nil
+	// --- Phase 2: create_link with stream={id} → ffmpeg URL (fallback) ---
+	if streamID != "" {
+		if link, err := c.tryCreateLinkStream(streamID); err == nil {
+			return link, nil
+		}
 	}
 
-	// --- Phase 4: Cloudflare-layer bypasses (no play_token needed) ---
+	// --- Phase 3: Cloudflare-layer bypasses (no real play_token) ---
 
-	// Method 1: CDN redirect via _=cache_bust on Cloudflare URL.
-	// Forces a Cloudflare cache miss → 302 → direct CDN stream URL.
+	// CDN redirect via _=cache_bust on Cloudflare URL.
 	if playBase != "" {
 		if link, err := c.tryCDNRedirect(playBase, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 2: Fake play_token on Cloudflare URL.
+	// Fake play_token on Cloudflare URL.
 	if playBase != "" && streamID != "" {
 		if link, err := c.tryFakePlayToken(playBase, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 3: Any-mac-cookie on Cloudflare URL.
+	// Any-mac-cookie on Cloudflare URL.
 	if playBase != "" && streamID != "" {
 		if link, err := c.tryAnyMacCookie(playBase, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// --- Phase 5: Origin-based methods (require discovered origin IPs) ---
+	// --- Phase 4: Origin-based methods (require origin IPs) ---
 	if base == "" {
 		return "", fmt.Errorf("no origin base URL available")
 	}
 
-	// Method 4: HLS Direct Endpoint — no auth needed, no rate limit.
+	// HLS Direct Endpoint — no auth needed, no rate limit.
 	if link, err := c.tryDirectHLS(base); err == nil {
 		return link, nil
 	}
 
-	// Method 5: play/live.php on origin with mac in query, no Cookie.
+	// play/live.php on origin with mac in query, no Cookie.
 	if streamID != "" {
 		if link, err := c.tryPlayLiveOrigin(base, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 6: play/live.php on origin without mac param.
+	// play/live.php on origin without mac param.
 	if streamID != "" {
 		if link, err := c.tryPlayLiveNoMac(base, streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// Method 7: Cookie-less create_link on origin.
+	// Cookie-less create_link on origin.
 	if link, err := c.tryCreateLinkNoCookie(); err == nil {
 		return link, nil
 	}
 
-	// Method 8: POST / alternate User-Agent on origin.
+	// POST / alternate User-Agent on origin.
 	if link, err := c.tryCreateLinkPOST(); err == nil {
 		return link, nil
 	}
@@ -400,9 +380,10 @@ func (c *Channel) tryCreateLinkStream(streamID string) (string, error) {
 // (same TCP connection as handshake and create_link). The CDN edge requires
 // TCP session affinity — live.php MUST be on the exact same connection.
 // Returns the 302 redirect Location (CDN stream URL with triple-base64 path).
-// The play_token is a 10-char server-side session key from create_link.
-func (c *Channel) trySessionLive(playBase string, streamID string, playToken string) (string, error) {
-	u := playBase + "?mac=" + url.QueryEscape(c.Portal.MAC) + "&stream=" + url.PathEscape(streamID) + "&extension=ts&play_token=" + url.PathEscape(playToken)
+// Uses the handshake token (Portal.Token) as play_token — confirmed working
+// directly with live.php without any create_link call.
+func (c *Channel) trySessionLive(playBase string, streamID string) (string, error) {
+	u := playBase + "?mac=" + url.QueryEscape(c.Portal.MAC) + "&stream=" + url.PathEscape(streamID) + "&extension=ts&play_token=" + url.QueryEscape(c.Portal.Token)
 	resp, err := c.Portal.doLiveRequest(u)
 	if err != nil {
 		return "", err
