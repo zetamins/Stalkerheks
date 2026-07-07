@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -526,4 +527,100 @@ func TestPlaybackFidelity(t *testing.T) {
 	t.Logf("   DeviceID:  FAKE-DEV → %s", receivedDeviceID)
 	t.Logf("   DeviceID2: FAKE-DEV2 → %s", receivedDeviceID2)
 	t.Logf("   Signature: FAKE-SIG → %s", receivedSignature)
+}
+
+// TestBareSTBRequest verifies that the proxy always forwards required STB
+// identity headers (Cookie, User-Agent, Authorization, X-User-Agent) even
+// when the STB sends a bare request without any of them — Cloudflare returns
+// a challenge page when these are missing.
+func TestBareSTBRequest(t *testing.T) {
+	var receivedHeaders map[string]string
+	headerMu := sync.Mutex{}
+
+	mockPortal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		action := q.Get("action")
+
+		// Only record headers on the get_profile call (our test target)
+		if action == "get_profile" {
+			headerMu.Lock()
+			receivedHeaders = map[string]string{
+				"Cookie":        r.Header.Get("Cookie"),
+				"User-Agent":    r.Header.Get("User-Agent"),
+				"X-User-Agent":  r.Header.Get("X-User-Agent"),
+				"Authorization": r.Header.Get("Authorization"),
+				"Sn":            r.Header.Get("Sn"),
+			}
+			headerMu.Unlock()
+		}
+
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		switch action {
+		case "handshake":
+			w.Write([]byte(`{"js":{"token":"test-token","random":"test-random"}}`))
+		case "get_profile":
+			w.Write([]byte(`{"js":{"status":"0","watchdog_timeout":30}}`))
+		case "get_localization":
+			w.Write([]byte(`{"js":{}}`))
+		case "get_modules":
+			w.Write([]byte(`{"js":{"all_modules":[],"disabled_modules":[]}}`))
+		default:
+			w.Write([]byte(`{"js":true}`))
+		}
+	}))
+	defer mockPortal.Close()
+
+	cfg := &stalker.Config{
+		Portal: &stalker.Portal{
+			Model:        "MAG544",
+			SerialNumber: "SN-TEST-12345",
+			MAC:          "00:1A:79:AB:CD:EF",
+			Location:     mockPortal.URL,
+			TimeZone:     "Europe/Vilnius",
+			Token:        "test-bearer-token",
+		},
+		HLS:   stalker.Service{Enabled: false},
+		Proxy: stalker.Service{Enabled: true, Bind: "127.0.0.1:18890"},
+	}
+
+	if err := cfg.Portal.Start(); err != nil {
+		t.Fatalf("Portal Start failed: %v", err)
+	}
+
+	proxyInst := NewInstance(cfg)
+	go proxyInst.Serve(cfg.Proxy.Bind)
+	defer proxyInst.Stop()
+	time.Sleep(100 * time.Millisecond)
+
+	// Emulate a bare STB request with NO identity headers at all
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:18890/?type=stb&action=get_profile&JsHttpRequest=1-xml", nil)
+	// Deliberately omit Cookie, User-Agent, Authorization, X-User-Agent
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+
+	headerMu.Lock()
+	defer headerMu.Unlock()
+
+	// The portal's handshake updates Token to what the mock returns
+	expectedToken := "test-token"
+	tests := []struct {
+		name    string
+		got     string
+		want    string
+	}{
+		{"Cookie", receivedHeaders["Cookie"], "mac=00%3A1A%3A79%3AAB%3ACD%3AEF; stb_lang=en; timezone=Europe%2FVilnius"},
+		{"User-Agent", receivedHeaders["User-Agent"], cfg.Portal.UserAgent()},
+		{"X-User-Agent", receivedHeaders["X-User-Agent"], "Model: MAG544; Link: Ethernet"},
+		{"Authorization", receivedHeaders["Authorization"], "Bearer " + expectedToken},
+		{"Sn", receivedHeaders["Sn"], "SN-TEST-12345"},
+	}
+	for _, tt := range tests {
+		if tt.got != tt.want {
+			t.Errorf("%s: got %q, want %q", tt.name, tt.got, tt.want)
+		}
+	}
 }
