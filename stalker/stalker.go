@@ -192,7 +192,9 @@ func (p *Portal) DoLiveRequest(link string) (*http.Response, error) {
 		return nil, err
 	}
 
-	req.Header.Set("User-Agent", p.UserAgent())
+	// Real STBs use a compact User-Agent for live.php requests (not the full
+	// WebKit-style portal UA). The CDN edge checks this specific format.
+	req.Header.Set("User-Agent", "Mozilla/5.0 (STB; "+p.Model+"/1.0)")
 	req.Header.Set("X-User-Agent", "Model: "+p.Model+"; Link: Ethernet")
 	req.Header.Set("Authorization", "Bearer "+p.Token)
 	cookieText := "mac=" + p.MAC + "; stb_lang=en; timezone=" + p.TimeZone
