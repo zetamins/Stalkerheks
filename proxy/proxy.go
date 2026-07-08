@@ -284,10 +284,11 @@ func (inst *Instance) requestHandler(w http.ResponseWriter, r *http.Request) {
 	// Use the STB's original path for non-root requests (e.g. /c/, /c/template/...)
 	// so the portal serves its HTML/JS/CSS directly from the web root instead of
 	// routing everything through load.php (which returns Cloudflare 520 for bare
-	// directory requests). Root requests (path == "/" or path == "") always go
-	// through portalPath (load.php) since the API is at that endpoint.
+	// directory requests). Root requests (path == "/" or path == "") and explicit
+	// /portal.php requests (which the portal JS uses as its ajax_loader URL) always
+	// go through portalPath (load.php) since the API is at that endpoint.
 	forwardPath := inst.portalPath
-	if r.URL.Path != "/" && r.URL.Path != "" {
+	if r.URL.Path != "/" && r.URL.Path != "" && r.URL.Path != "/portal.php" {
 		forwardPath = r.URL.Path
 	}
 	finalLink := inst.destination + forwardPath
@@ -552,7 +553,8 @@ func (inst *Instance) rewriteChannelListCmds(body, requestHost string) string {
 	return sb.String()
 }
 
-// rewriteExternalURLs replaces third-party service URLs with proxy endpoints.
+// rewriteExternalURLs replaces third-party service URLs with proxy endpoints
+// and fixes portal JavaScript ajax_loader URLs.
 func (inst *Instance) rewriteExternalURLs(body, host string) string {
 	rules := []struct{ from, to string }{
 		{"http://weather.infomir.com.ua/", "http://" + host + "/_weather/"},
@@ -562,6 +564,15 @@ func (inst *Instance) rewriteExternalURLs(body, host string) string {
 	for _, r := range rules {
 		body = strings.ReplaceAll(body, r.from, r.to)
 	}
+	// Fix the portal's ajax_loader URL in xpcom.common.js. The portal
+	// JavaScript constructs ajax_loader as "/portal.php" (without the
+	// portal_path), so subsequent AJAX calls (EPG, channels, etc.) go to
+	// e.g. /portal.php?type=itv&action=get_epg_info which doesn't exist
+	// on the real portal — it only serves at e.g. /c/portal.php. Inject
+	// portal_path so the browser uses the correct path.
+	body = strings.ReplaceAll(body,
+		`this.portal_ip+'/portal.php'`,
+		`this.portal_ip+'/' + this.portal_path + '/portal.php'`)
 	return body
 }
 
