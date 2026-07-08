@@ -42,22 +42,30 @@ func getRequest(link string, originalRequest *http.Request, config *stalker.Conf
 	// Always set minimum STB identity headers regardless of what the STB
 	// sends. Cloudflare requires these to recognise the request as a
 	// legitimate STB; omitting them triggers a challenge/interstitial page.
+	// Note: Sn is deliberately NOT set — real MAG STBs don't send it,
+	// and adding it makes the request look different from a real STB,
+	// which can trigger Cloudflare WAF rules.
 	req.Header.Set("Authorization", "Bearer "+config.Portal.Token)
 	req.Header.Set("Cookie", "mac="+url.QueryEscape(config.Portal.MAC)+"; stb_lang=en; timezone="+url.QueryEscape(config.Portal.TimeZone))
 	req.Header.Set("User-Agent", config.Portal.UserAgent())
 	req.Header.Set("X-User-Agent", "Model: "+config.Portal.Model+"; Link: Ethernet")
-	if config.Portal.SerialNumber != "" {
-		req.Header.Set("Sn", config.Portal.SerialNumber)
-	}
 
 	for k, v := range originalRequest.Header {
 		switch k {
 		case "Authorization", "Cookie", "User-Agent", "X-User-Agent", "Sn":
-			// Already set above — skip override from STB to prevent
-			// untrusted STB headers from reaching the real portal.
+			// Sn is never sent by real MAG STBs and is not set above;
+			// explicitly skip it so an STB can't inject it either.
 		case "Host":
 			if destURL != nil {
-				req.Header.Set("Host", destURL.Host)
+				// Strip default port from Host header. Some Cloudflare
+				// WAF rules flag requests with ":80" in Host as unusual.
+				host := destURL.Host
+				if strings.HasSuffix(host, ":80") && destURL.Scheme == "http" {
+					host = destURL.Hostname()
+				} else if strings.HasSuffix(host, ":443") && destURL.Scheme == "https" {
+					host = destURL.Hostname()
+				}
+				req.Header.Set("Host", host)
 			}
 		case "Referer":
 			continue

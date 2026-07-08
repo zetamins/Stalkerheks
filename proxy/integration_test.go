@@ -616,7 +616,7 @@ func TestBareSTBRequest(t *testing.T) {
 		{"User-Agent", receivedHeaders["User-Agent"], cfg.Portal.UserAgent()},
 		{"X-User-Agent", receivedHeaders["X-User-Agent"], "Model: MAG544; Link: Ethernet"},
 		{"Authorization", receivedHeaders["Authorization"], "Bearer " + expectedToken},
-		{"Sn", receivedHeaders["Sn"], "SN-TEST-12345"},
+		// Sn is deliberately NOT set — real MAG STBs don't send it.
 	}
 	for _, tt := range tests {
 		if tt.got != tt.want {
