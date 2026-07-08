@@ -281,7 +281,16 @@ func (inst *Instance) requestHandler(w http.ResponseWriter, r *http.Request) {
 	// ################################################
 	// Proxy modified request to real portal
 
-	finalLink := inst.destination + inst.portalPath
+	// Use the STB's original path for non-root requests (e.g. /c/, /c/template/...)
+	// so the portal serves its HTML/JS/CSS directly from the web root instead of
+	// routing everything through load.php (which returns Cloudflare 520 for bare
+	// directory requests). Root requests (path == "/" or path == "") always go
+	// through portalPath (load.php) since the API is at that endpoint.
+	forwardPath := inst.portalPath
+	if r.URL.Path != "/" && r.URL.Path != "" {
+		forwardPath = r.URL.Path
+	}
+	finalLink := inst.destination + forwardPath
 	if len(r.URL.RawQuery) != 0 {
 		finalLink += "?" + query.Encode()
 	}
