@@ -46,7 +46,7 @@ func getRequest(link string, originalRequest *http.Request, config *stalker.Conf
 	// and adding it makes the request look different from a real STB,
 	// which can trigger Cloudflare WAF rules.
 	req.Header.Set("Authorization", "Bearer "+config.Portal.Token)
-	req.Header.Set("Cookie", "mac="+url.QueryEscape(config.Portal.MAC)+"; stb_lang=en; timezone="+url.QueryEscape(config.Portal.TimeZone))
+	req.Header.Set("Cookie", "mac="+config.Portal.MAC+"; stb_lang=en; timezone="+config.Portal.TimeZone)
 	req.Header.Set("User-Agent", config.Portal.UserAgent())
 	req.Header.Set("X-User-Agent", "Model: "+config.Portal.Model+"; Link: Ethernet")
 

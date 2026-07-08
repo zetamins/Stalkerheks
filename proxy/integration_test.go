@@ -612,7 +612,7 @@ func TestBareSTBRequest(t *testing.T) {
 		got     string
 		want    string
 	}{
-		{"Cookie", receivedHeaders["Cookie"], "mac=00%3A1A%3A79%3AAB%3ACD%3AEF; stb_lang=en; timezone=Europe%2FVilnius"},
+		{"Cookie", receivedHeaders["Cookie"], "mac=00:1A:79:AB:CD:EF; stb_lang=en; timezone=Europe/Vilnius"},
 		{"User-Agent", receivedHeaders["User-Agent"], cfg.Portal.UserAgent()},
 		{"X-User-Agent", receivedHeaders["X-User-Agent"], "Model: MAG544; Link: Ethernet"},
 		{"Authorization", receivedHeaders["Authorization"], "Bearer " + expectedToken},

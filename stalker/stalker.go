@@ -195,7 +195,7 @@ func (p *Portal) DoLiveRequest(link string) (*http.Response, error) {
 	req.Header.Set("User-Agent", p.UserAgent())
 	req.Header.Set("X-User-Agent", "Model: "+p.Model+"; Link: Ethernet")
 	req.Header.Set("Authorization", "Bearer "+p.Token)
-	cookieText := "mac=" + url.QueryEscape(p.MAC) + "; stb_lang=en; timezone=" + url.QueryEscape(p.TimeZone)
+	cookieText := "mac=" + p.MAC + "; stb_lang=en; timezone=" + p.TimeZone
 	req.Header.Set("Cookie", cookieText)
 
 	return httpRedirectClient.Do(req)
