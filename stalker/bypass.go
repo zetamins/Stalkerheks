@@ -47,24 +47,40 @@ func (c *Channel) tryBypass() (string, error) {
 	streamID := extractStreamID(c.CMD)
 	playBase := playBaseFromCMD(c.CMD)
 
-	// --- Phase 1: Handshake token → live.php → CDN redirect (best path) ---
-	// The handshake token works directly as play_token. live.php must be
-	// called on the same TCP session (httpRedirectClient) to pass the CDN
-	// edge's session affinity check.
-	if c.Portal.Token != "" && playBase != "" && streamID != "" {
-		if link, err := c.trySessionLive(playBase, streamID); err == nil {
+	// --- Phase 1: Pre-filled token → live.php → CDN redirect (no handshake) ---
+	// get_all_channels embeds a 10-char alphanumeric play_token in each
+	// channel's cmd field. These work directly in live.php without any
+	// handshake or create_link call — the portal pre-generates them.
+	if c.PrefilledToken != "" && playBase != "" && streamID != "" {
+		if link, err := c.trySessionLivePrefilled(playBase, streamID, c.PrefilledToken); err == nil {
+			return link, nil
+		}
+		// Token-in-Cookie routes through a different CDN internal path.
+		if link, err := c.trySessionLivePrefilledCookie(playBase, streamID, c.PrefilledToken); err == nil {
 			return link, nil
 		}
 	}
 
-	// --- Phase 2: create_link with stream={id} → ffmpeg URL (fallback) ---
+	// --- Phase 2: Handshake token → live.php → CDN redirect (requires handshake) ---
+	// The handshake token (32-char hex) also works as play_token. Fallback
+	// when the channel cmd has no pre-filled token.
+	if c.Portal.Token != "" && playBase != "" && streamID != "" {
+		if link, err := c.trySessionLive(playBase, streamID); err == nil {
+			return link, nil
+		}
+		if link, err := c.trySessionLiveTokenCookie(playBase, streamID); err == nil {
+			return link, nil
+		}
+	}
+
+	// --- Phase 3: create_link with stream={id} → ffmpeg URL (fallback) ---
 	if streamID != "" {
 		if link, err := c.tryCreateLinkStream(streamID); err == nil {
 			return link, nil
 		}
 	}
 
-	// --- Phase 3: Cloudflare-layer bypasses (no real play_token) ---
+	// --- Phase 4: Cloudflare-layer bypasses (no real play_token) ---
 
 	// CDN redirect via _=cache_bust on Cloudflare URL.
 	if playBase != "" {
@@ -87,7 +103,7 @@ func (c *Channel) tryBypass() (string, error) {
 		}
 	}
 
-	// --- Phase 4: Origin-based methods (require origin IPs) ---
+	// --- Phase 5: Origin-based methods (require origin IPs) ---
 	if base == "" {
 		return "", fmt.Errorf("no origin base URL available")
 	}
@@ -397,6 +413,67 @@ func (c *Channel) trySessionLive(playBase string, streamID string) (string, erro
 		}
 	}
 	return "", fmt.Errorf("session live.php returned %d", resp.StatusCode)
+}
+
+// trySessionLiveTokenCookie is identical to trySessionLive but passes the
+// play_token as a Cookie header instead of a URL query parameter. Some CDN
+// deployments route token-in-cookie requests through a different internal
+// path that may have spare capacity when the query-param path is
+// rate-limited (458).
+func (c *Channel) trySessionLiveTokenCookie(playBase string, streamID string) (string, error) {
+	u := playBase + "?mac=" + url.QueryEscape(c.Portal.MAC) + "&stream=" + url.PathEscape(streamID) + "&extension=ts"
+	resp, err := c.Portal.DoLiveRequestTokenCookie(u)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode == 302 {
+		loc := resp.Header.Get("Location")
+		if loc != "" {
+			return resolveURL(u, loc), nil
+		}
+	}
+	return "", fmt.Errorf("session live.php (token cookie) returned %d", resp.StatusCode)
+}
+
+// trySessionLivePrefilled calls live.php with a pre-filled token from the
+// channel's cmd field (extracted from get_all_channels). These 10-char
+// alphanumeric tokens work directly — no handshake or create_link needed.
+func (c *Channel) trySessionLivePrefilled(playBase, streamID, token string) (string, error) {
+	u := playBase + "?mac=" + url.QueryEscape(c.Portal.MAC) + "&stream=" + url.PathEscape(streamID) + "&extension=ts&play_token=" + url.QueryEscape(token)
+	resp, err := c.Portal.DoLiveRequest(u)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode == 302 {
+		loc := resp.Header.Get("Location")
+		if loc != "" {
+			return resolveURL(u, loc), nil
+		}
+	}
+	return "", fmt.Errorf("prefilled live.php returned %d", resp.StatusCode)
+}
+
+// trySessionLivePrefilledCookie calls live.php with the pre-filled token in
+// the "play_token" Cookie header instead of a URL query parameter.
+func (c *Channel) trySessionLivePrefilledCookie(playBase, streamID, token string) (string, error) {
+	u := playBase + "?mac=" + url.QueryEscape(c.Portal.MAC) + "&stream=" + url.PathEscape(streamID) + "&extension=ts"
+	resp, err := c.Portal.DoLiveRequestPlayTokenCookie(u, token)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode == 302 {
+		loc := resp.Header.Get("Location")
+		if loc != "" {
+			return resolveURL(u, loc), nil
+		}
+	}
+	return "", fmt.Errorf("prefilled live.php (token cookie) returned %d", resp.StatusCode)
 }
 
 // --- Helpers --------------------------------------------------------------

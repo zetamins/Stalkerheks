@@ -18,6 +18,17 @@ import (
 // crashes. Match Go's own http.Client default of 10.
 const maxPortalRedirects = 10
 
+// RefreshToken closes the existing HTTP connection pool and performs a new
+// handshake to obtain a fresh token. By forcing new TCP connections, the
+// subsequent handshake may route to a different Cloudflare edge node with
+// available capacity — the key recovery step after a 458 (rate-limit) error.
+func (p *Portal) RefreshToken() error {
+	if tr, ok := httpRedirectClient.Transport.(*http.Transport); ok {
+		tr.CloseIdleConnections()
+	}
+	return p.handshake()
+}
+
 // Start connects to stalker portal, reserves token, starts watchdog etc.
 func (p *Portal) Start() error {
 	// Best-effort NTP time sync before portal connection. Real STBs sync
@@ -198,6 +209,35 @@ func (p *Portal) DoLiveRequest(link string) (*http.Response, error) {
 	req.Header.Set("X-User-Agent", "Model: "+p.Model+"; Link: Ethernet")
 	req.Header.Set("Authorization", "Bearer "+p.Token)
 	cookieText := "mac=" + p.MAC + "; stb_lang=en; timezone=" + p.TimeZone
+	req.Header.Set("Cookie", cookieText)
+
+	return httpRedirectClient.Do(req)
+}
+
+// DoLiveRequestTokenCookie is identical to DoLiveRequest but passes the
+// play_token as a Cookie header value rather than a URL query parameter.
+// The cookie name is "play_token" (confirmed working against real CDN nodes).
+// Some CDN deployments route token-in-cookie requests through a different
+// internal path that may have spare capacity when the query-param path is
+// rate-limited (458).
+func (p *Portal) DoLiveRequestTokenCookie(link string) (*http.Response, error) {
+	return p.DoLiveRequestPlayTokenCookie(link, p.Token)
+}
+
+// DoLiveRequestPlayTokenCookie sends a live.php GET with the given token
+// in the "play_token" Cookie header instead of a URL query parameter. The
+// token cookie is a separate routing path through the CDN that may have
+// spare capacity when the query-param path is rate-limited.
+func (p *Portal) DoLiveRequestPlayTokenCookie(link, token string) (*http.Response, error) {
+	req, err := http.NewRequest("GET", link, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0 (STB; "+p.Model+"/1.0)")
+	req.Header.Set("X-User-Agent", "Model: "+p.Model+"; Link: Ethernet")
+	req.Header.Set("Authorization", "Bearer "+p.Token)
+	cookieText := "mac=" + p.MAC + "; stb_lang=en; timezone=" + p.TimeZone + "; play_token=" + token
 	req.Header.Set("Cookie", cookieText)
 
 	return httpRedirectClient.Do(req)

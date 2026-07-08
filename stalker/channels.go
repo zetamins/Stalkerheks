@@ -22,6 +22,31 @@ type Channel struct {
 
 	CMD_ID    string // Used for Proxy service to generate fake response to new URL request
 	CMD_CH_ID string // Used for Proxy service to generate fake response to new URL request
+
+	// PrefilledToken is a pre-generated play_token embedded in the channel's
+	// CMD field from get_all_channels/get_ordered_list. These are 10-char
+	// alphanumeric tokens that work directly in live.php — no handshake or
+	// create_link needed. Extracted from the cmd URL on channel retrieval.
+	PrefilledToken string
+}
+
+// extractPlayTokenFromCMD parses the play_token parameter from a channel CMD
+// string. The CMD format is:
+//
+//	ffmpeg http://host/play/live.php?mac=MAC&stream=ID&extension=ts&play_token=TOKEN
+//
+// Returns empty string if no play_token is found.
+func extractPlayTokenFromCMD(cmd string) string {
+	idx := strings.Index(cmd, "play_token=")
+	if idx < 0 {
+		return ""
+	}
+	start := idx + 11 // len("play_token=")
+	end := strings.IndexAny(cmd[start:], "& ")
+	if end < 0 {
+		return cmd[start:]
+	}
+	return cmd[start : start+end]
 }
 
 // createLinkMaxAttempts caps retries for transient create_link errors.
@@ -275,14 +300,15 @@ func (p *Portal) RetrieveChannels() (map[string]*Channel, error) {
 			cmdCHID = v.CMDs[0].CH_ID
 		}
 		channels[title] = &Channel{
-			Title:     title,
-			CMD:       v.Cmd,
-			LogoLink:  v.Logo,
-			Portal:    p,
-			GenreID:   v.GenreID,
-			Genres:    &genres,
-			CMD_ID:    cmdID,
-			CMD_CH_ID: cmdCHID,
+			Title:          title,
+			CMD:            v.Cmd,
+			LogoLink:       v.Logo,
+			Portal:         p,
+			GenreID:        v.GenreID,
+			Genres:         &genres,
+			CMD_ID:         cmdID,
+			CMD_CH_ID:      cmdCHID,
+			PrefilledToken: extractPlayTokenFromCMD(v.Cmd),
 		}
 	}
 
@@ -354,12 +380,13 @@ func (p *Portal) RetrieveOrderedChannels() (map[string]*Channel, error) {
 			title = v.Name + " (" + v.ID + ")"
 		}
 		channels[title] = &Channel{
-			Title:     title,
-			CMD:       v.Cmd,
-			LogoLink:  v.Logo,
-			Portal:    p,
-			GenreID:   v.GenreID,
-			Genres:    &genres,
+			Title:          title,
+			CMD:            v.Cmd,
+			LogoLink:       v.Logo,
+			Portal:         p,
+			GenreID:        v.GenreID,
+			Genres:         &genres,
+			PrefilledToken: extractPlayTokenFromCMD(v.Cmd),
 		}
 	}
 

@@ -53,18 +53,39 @@ func (inst *Instance) handleContentUnknown(cr *ContentRequest) {
 	sharingLimited := false
 	for attempt := 0; attempt <= len(backoffs); attempt++ {
 		if attempt > 0 {
-			// Get a fresh CDN URL with new play_token from the portal. On a
-			// sharing-limit fallback, mint it on the cdn_mac instead of the
-			// auth MAC.
-			var newLink string
-			var linkErr error
-			if sharingLimited && cr.ChannelRef.StalkerChannel.HasCDNMAC() {
-				newLink, linkErr = cr.ChannelRef.StalkerChannel.NewLinkCDNMAC(true)
-			} else {
-				newLink, linkErr = cr.ChannelRef.StalkerChannel.NewLink(true)
+			l3Recovered := false
+			if sharingLimited {
+				// Fast path: try L3 reconnect using the cached L3 path and
+				// CDN node. The CDN caches L3→channel independently of
+				// Cloudflare, so the same L3 may still work even after a
+				// 458 from Cloudflare's rate-limiter. Tries the cached node
+				// first, then discovered origin IPs (multi-CDN fallback).
+				if l3URL, l3Err := cr.ChannelRef.reconnectWithCachedL3(inst); l3Err == nil {
+					cr.ChannelRef.Link = l3URL
+					l3Recovered = true
+				} else {
+					// L3 reconnect failed; do a fresh handshake. The new
+					// handshake gets a fresh token and may route to a
+					// different Cloudflare edge node with available capacity.
+					if err := cr.ChannelRef.StalkerChannel.Portal.RefreshToken(); err != nil {
+						log.Printf("token refresh failed on 458 retry: %v", err)
+					}
+				}
 			}
-			if linkErr == nil {
-				cr.ChannelRef.Link = newLink
+			if !l3Recovered {
+				// Get a fresh CDN URL with new play_token from the portal. On a
+				// sharing-limit fallback, mint it on the cdn_mac instead of the
+				// auth MAC.
+				var newLink string
+				var linkErr error
+				if sharingLimited && cr.ChannelRef.StalkerChannel.HasCDNMAC() {
+					newLink, linkErr = cr.ChannelRef.StalkerChannel.NewLinkCDNMAC(true)
+				} else {
+					newLink, linkErr = cr.ChannelRef.StalkerChannel.NewLink(true)
+				}
+				if linkErr == nil {
+					cr.ChannelRef.Link = newLink
+				}
 			}
 		}
 		resp, err = instanceResponse(cr.ChannelRef.Link, inst)
@@ -105,6 +126,20 @@ func (inst *Instance) handleContentUnknown(cr *ContentRequest) {
 
 	cr.ChannelRef.LinkType = getLinkType(resp.Header.Get("Content-Type"))
 
+	// Cache the effective CDN URL (after all redirects) for fast reconnection.
+	// The cached URL lets validate() skip NewLink/live.php on the next request
+	// if the CDN node still serves it.
+	cacheURL := resp.Request.URL.String()
+	cr.ChannelRef.SetCachedCDNURL(cacheURL)
+
+	// Start keep-alive based on content type. HLS gets playlist refreshes;
+	// media streams get periodic HEAD requests to keep the TCP path alive.
+	if cr.ChannelRef.LinkType == linkTypeHLS {
+		cr.ChannelRef.startKeepAlive()
+	} else {
+		cr.ChannelRef.startMediaKeepAlive()
+	}
+
 	// Stream the response we just fetched, instead of closing it and
 	// re-fetching the same link. The old path resolved the play URL twice per
 	// request (once to detect the type, once to stream), which doubled
@@ -114,7 +149,6 @@ func (inst *Instance) handleContentUnknown(cr *ContentRequest) {
 	if cr.ChannelRef.LinkType == linkTypeHLS {
 		cr.ChannelRef.HLSLink = resp.Request.URL.String()
 		cr.ChannelRef.HLSLinkRoot = deleteAfterLastSlash(cr.ChannelRef.HLSLink)
-		cr.ChannelRef.startKeepAlive()
 		link := cr.ChannelRef.HLSLink
 		cr.ChannelRef.Mux.Unlock()
 		inst.handleEstablishedContentHLS(cr, resp, link)
