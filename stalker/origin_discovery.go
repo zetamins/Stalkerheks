@@ -4,29 +4,9 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"sync"
 	"time"
 )
-
-// cloudflareDirectIPs lists common Cloudflare proxy IPs for direct-origin
-// fallback. When DNS fails to resolve the portal hostname, these IPs are
-// tried with the original Host header to reach Cloudflare's edge directly.
-// This list is non-exhaustive — Cloudflare publishes current ranges at
-// https://www.cloudflare.com/ips-v4 .
-// 
-// Set CloudflareDirectFallback to true to enable this feature.
-var CloudflareDirectFallback bool
-
-var cloudflareDirectIPs = []string{
-	"172.67.154.216",
-	"104.21.0.1",
-	"104.21.0.2",
-	"104.21.0.3",
-	"172.64.0.1",
-	"172.64.0.2",
-	"172.64.0.3",
-}
 
 // originScanner is an HTTP client used for origin IP discovery probes.
 // No keep-alives — each probe is a one-shot check against a different IP.
@@ -131,59 +111,4 @@ func probeOrigin(ipStr string, mac string) bool {
 	return true
 }
 
-// originURL returns the given portal URL with its host replaced by the
-// first discovered origin IP. Returns the original URL unchanged when no
-// origin IPs have been discovered.
-func (p *Portal) originURL(originalURL string) string {
-	if len(p.OriginIPs) == 0 {
-		return originalURL
-	}
 
-	parsed, err := url.Parse(originalURL)
-	if err != nil {
-		return originalURL
-	}
-
-	parsed.Host = p.OriginIPs[0]
-	return parsed.String()
-}
-
-// tryCloudflareIP attempts to reach the portal through a raw Cloudflare edge
-// IP with the correct Host header, bypassing DNS resolution failures.
-// Returns the origin base if successful, empty string otherwise.
-func (p *Portal) tryCloudflareIP() string {
-	if p.Location == "" {
-		return ""
-	}
-	parsed, err := url.Parse(p.Location)
-	if err != nil || parsed.Host == "" {
-		return ""
-	}
-	host := parsed.Host
-	// Strip port for Host header
-	hostOnly, _, err := net.SplitHostPort(host)
-	if err != nil {
-		hostOnly = host
-	}
-	if !CloudflareDirectFallback {
-		return ""
-	}
-	for _, cfIP := range cloudflareDirectIPs {
-		u := "http://" + cfIP + ":80/play/live.php?mac=" + url.QueryEscape(p.MAC) + "&stream=1&extension=ts"
-		req, err := http.NewRequest("GET", u, nil)
-		if err != nil {
-			continue
-		}
-		req.Host = hostOnly
-		req.Header.Set("User-Agent", "curl/8.0")
-		req.Header.Set("Cookie", "mac="+url.QueryEscape(p.MAC)+"; stb_lang=en; timezone="+url.QueryEscape(p.TimeZone))
-		resp, err := originScanner.Do(req)
-		if err != nil {
-			continue
-		}
-		resp.Body.Close()
-		// Any response (including 458/511) confirms this CF IP routes to our portal
-		return "http://" + cfIP
-	}
-	return ""
-}

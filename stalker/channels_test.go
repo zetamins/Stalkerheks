@@ -173,37 +173,6 @@ func TestRetrieveRadioChannels(t *testing.T) {
 	}
 }
 
-// TestNewLinkBypasses458ViaOrigin verifies that when create_link returns 458
-// (rate limit) through Cloudflare, the bypass methods try the origin server
-// directly for HLS streaming.
-func TestNewLinkBypasses458ViaOrigin(t *testing.T) {
-	cloudflare := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(458)
-	}))
-	defer cloudflare.Close()
-
-	// Origin serves HLS content at a direct path using the stream ID (691399)
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/x-mpegurl")
-		w.Write([]byte("#EXTM3U\n#EXTINF:-1,test\nhttp://cdn.example/live/456"))
-	}))
-	defer origin.Close()
-
-	p := &Portal{
-		Location:  cloudflare.URL,
-		OriginIPs: []string{origin.Listener.Addr().String()},
-	}
-	c := &Channel{CMD: "ffmpeg http://cdn.com/play/live.php?mac=aa:bb&stream=691399", Portal: p, CMD_ID: "691399", CMD_CH_ID: "691399"}
-
-	link, err := c.NewLink(false)
-	if err != nil {
-		t.Fatalf("NewLink should bypass 458 via origin, got: %v", err)
-	}
-	if link == "" {
-		t.Fatal("expected non-empty link")
-	}
-}
-
 // TestNewLinkFallsBackWhenNoOrigins verifies that without OriginIPs,
 // create_link goes through the configured portal URL (Cloudflare) and
 // returns its 458 error rather than a working link.
